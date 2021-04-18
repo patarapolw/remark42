@@ -8,6 +8,7 @@ import (
 	"html"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	log "github.com/go-pkgz/lgr"
@@ -28,7 +29,6 @@ const telegramAPIPrefix = "https://api.telegram.org/bot"
 
 // NewTelegram makes telegram bot for notifications
 func NewTelegram(token, channelID string, timeout time.Duration, api string) (*Telegram, error) {
-
 	if _, err := strconv.ParseInt(channelID, 10, 64); err != nil {
 		channelID = "@" + channelID // if channelID not a number enforce @ prefix
 	}
@@ -86,15 +86,6 @@ func NewTelegram(token, channelID string, timeout time.Duration, api string) (*T
 
 // Send to telegram channel
 func (t *Telegram) Send(ctx context.Context, req Request) error {
-	if req.Comment.ID == "" {
-		// verification request received, send nothing
-		return nil
-	}
-	if req.ForAdmin {
-		// request for administrator received, do nothing with it
-		// as we already sent message on request without this flag set
-		return nil
-	}
 	client := http.Client{Timeout: telegramTimeOut}
 	log.Printf("[DEBUG] send telegram notification to %s, comment id %s", t.channelID, req.Comment.ID)
 
@@ -105,7 +96,7 @@ func (t *Telegram) Send(ctx context.Context, req Request) error {
 	from = "*" + from + "*"
 	link := fmt.Sprintf("↦ [original comment](%s)", req.Comment.Locator.URL+uiNav+req.Comment.ID)
 	if req.Comment.PostTitle != "" {
-		link = fmt.Sprintf("↦ [%s](%s)", req.Comment.PostTitle, req.Comment.Locator.URL+uiNav+req.Comment.ID)
+		link = fmt.Sprintf("↦ [%s](%s)", t.escapeTitle(req.Comment.PostTitle), req.Comment.Locator.URL+uiNav+req.Comment.ID)
 	}
 	u := fmt.Sprintf("%s%s/sendMessage?chat_id=%s&parse_mode=Markdown&disable_web_page_preview=true",
 		t.apiPrefix, t.token, t.channelID)
@@ -149,6 +140,20 @@ func (t *Telegram) Send(ctx context.Context, req Request) error {
 	if err = json.NewDecoder(resp.Body).Decode(&tgResp); err != nil {
 		return errors.Wrap(err, "can't decode telegram response")
 	}
+	return nil
+}
+
+func (t *Telegram) escapeTitle(title string) string {
+	escSymbols := []string{"[", "]", "(", ")"}
+	res := title
+	for _, esc := range escSymbols {
+		res = strings.Replace(res, esc, "\\"+esc, -1)
+	}
+	return res
+}
+
+// SendVerification is not implemented for telegram
+func (t *Telegram) SendVerification(_ context.Context, _ VerificationRequest) error {
 	return nil
 }
 

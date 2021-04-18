@@ -18,6 +18,7 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/go-pkgz/auth/token"
 	"github.com/umputun/go-flags"
+	"go.uber.org/goleak"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,10 +81,10 @@ func TestServerApp_DevMode(t *testing.T) {
 	// send ping
 	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/api/v1/ping", port))
 	require.NoError(t, err)
-	defer resp.Body.Close()
 	assert.Equal(t, 200, resp.StatusCode)
 	body, err := ioutil.ReadAll(resp.Body)
 	assert.NoError(t, err)
+	assert.NoError(t, resp.Body.Close())
 	assert.Equal(t, "pong", string(body))
 
 	cancel()
@@ -146,7 +147,19 @@ func TestServerApp_AnonMode(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 
 	// try to login with short name
-	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=bl%20%20&aud=remark", port))
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=bl%%20%%20&aud=remark", port))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+	// try to login with name what have space in prefix
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=%%20somebody&aud=remark", port))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+	// try to login with name what have space in suffix
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=somebody%%20&aud=remark", port))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
@@ -159,7 +172,7 @@ func TestServerApp_AnonMode(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 
 	// try to login with admin name
-	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=umputun&aud=remark", port))
+	resp, err = http.Get(fmt.Sprintf("http://localhost:%d/auth/anonymous/login?user=umpUtun&aud=remark", port))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -305,7 +318,7 @@ func TestServerApp_Failed(t *testing.T) {
 	_, err = p.ParseArgs([]string{"--store.bolt.path=/tmp", "--backup=/dev/null/not-writable"})
 	assert.NoError(t, err)
 	_, err = opts.newServerApp()
-	assert.EqualError(t, err, "can't make directory /dev/null/not-writable: mkdir /dev/null: not a directory")
+	assert.EqualError(t, err, "failed to create backup store: can't make directory /dev/null/not-writable: mkdir /dev/null: not a directory")
 	t.Log(err)
 
 	// invalid url
@@ -327,6 +340,19 @@ func TestServerApp_Failed(t *testing.T) {
 	opts.Store.Type = "blah"
 	_, err = opts.newServerApp()
 	assert.EqualError(t, err, "failed to make data store engine: unsupported store type blah")
+	t.Log(err)
+
+	// wrong redis location
+	opts = ServerCommand{}
+	opts.SetCommon(CommonOpts{RemarkURL: "https://demo.remark42.com", SharedSecret: "123456"})
+	p = flags.NewParser(&opts, flags.Default)
+	_, err = p.ParseArgs([]string{"--store.bolt.path=/tmp", "--cache.type=redis_pub_sub", "--cache.redis_addr=wrong_address"})
+	assert.NoError(t, err)
+	_, err = opts.newServerApp()
+	assert.EqualError(t, err,
+		"failed to make cache: cache backend initialization, redis PubSub initialisation: "+
+			"problem subscribing to channel remark42-cache on address wrong_address: "+
+			"dial tcp: address wrong_address: missing port in address")
 	t.Log(err)
 }
 
@@ -495,7 +521,7 @@ func TestServerAuthHooks(t *testing.T) {
 	req.Header.Set("X-JWT", tk)
 	resp, err := client.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusCreated, resp.StatusCode, "non-blocked user able to post")
 
 	// add comment with no-aud claim
@@ -506,14 +532,14 @@ func TestServerAuthHooks(t *testing.T) {
 	t.Logf("no-aud claims: %s", tkNoAud)
 	req, err = http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/api/v1/comment", port),
 		strings.NewReader(`{"text": "test 123", "locator":{"url": "https://radio-t.com/p/2018/12/29/podcast-631/",
-"site": "remark"}}`))
+	"site": "remark"}}`))
 	require.NoError(t, err)
 	req.Header.Set("X-JWT", tkNoAud)
 	resp, err = client.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, "user without aud claim rejected, \n"+tkNoAud+"\n"+string(body))
 
 	// block user dev as admin
@@ -523,10 +549,10 @@ func TestServerAuthHooks(t *testing.T) {
 	req.SetBasicAuth("admin", "password")
 	resp, err = client.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "user dev blocked")
 	b, err := ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	t.Log(string(b))
 
 	// try add a comment with blocked user
@@ -536,14 +562,15 @@ func TestServerAuthHooks(t *testing.T) {
 	req.Header.Set("X-JWT", tk)
 	resp, err = client.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
 	body, err = ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.True(t, resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized,
 		"blocked user can't post, \n"+tk+"\n"+string(body))
 
 	cancel()
 	app.Wait()
+	client.CloseIdleConnections()
 }
 
 func TestServer_loadEmailTemplate(t *testing.T) {
@@ -557,6 +584,29 @@ func TestServer_loadEmailTemplate(t *testing.T) {
 	r, err = cmd.loadEmailTemplate()
 	assert.EqualError(t, err, "failed to read file badpath.tmpl: open badpath.tmpl: no such file or directory")
 	assert.Equal(t, r, "")
+}
+
+func TestServerCommand_parseSameSite(t *testing.T) {
+
+	tbl := []struct {
+		inp string
+		res http.SameSite
+	}{
+		{"", http.SameSiteDefaultMode},
+		{"default", http.SameSiteDefaultMode},
+		{"blah", http.SameSiteDefaultMode},
+		{"none", http.SameSiteNoneMode},
+		{"lax", http.SameSiteLaxMode},
+		{"strict", http.SameSiteStrictMode},
+	}
+
+	cmd := ServerCommand{}
+	for i, tt := range tbl {
+		tt := tt
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			assert.Equal(t, tt.res, cmd.parseSameSite(tt.inp))
+		})
+	}
 }
 
 func chooseRandomUnusedPort() (port int) {
@@ -622,16 +672,25 @@ func prepServerApp(t *testing.T, fn func(o ServerCommand) ServerCommand) (*serve
 	cmd.SMTP.TimeOut = time.Second
 	cmd.UpdateLimit = 10
 	cmd.Admin.Type = "shared"
-	cmd.Admin.Shared.Admins = []string{"umputun", "bobuk"}
+	cmd.Admin.Shared.Admins = []string{"id1", "id2"}
+	cmd.RestrictedNames = []string{"umputun", "bobuk"}
 	cmd = fn(cmd)
 
 	os.Remove(cmd.Store.Bolt.Path + "/remark.db")
 
-	// create app
+	return createAppFromCmd(t, cmd)
+}
+
+func createAppFromCmd(t *testing.T, cmd ServerCommand) (*serverApp, context.Context, context.CancelFunc) {
 	app, err := cmd.newServerApp()
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rand.Seed(time.Now().UnixNano())
 	return app, ctx, cancel
+}
+
+func TestMain(m *testing.M) {
+	// ignore is added only for GitHub Actions, can't reproduce locally
+	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("net/http.(*Server).Shutdown"))
 }

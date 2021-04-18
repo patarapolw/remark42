@@ -39,6 +39,11 @@ func TestDisqus_Import(t *testing.T) {
 	assert.Equal(t, "Alexander Blah", c.User.Name)
 	assert.Equal(t, "disqus_328c8b68974aef73785f6b38c3d3fedfdf941434", c.User.ID)
 	assert.Equal(t, "2ba6b71dbf9750ae3356cce14cac6c1b1962747c", c.User.IP)
+	assert.True(t, c.Imported)
+
+	c = last[1] // get comment with empty username
+	assert.Equal(t, "No Username", c.User.Name)
+	assert.Equal(t, "disqus_62e24ea213756cda0339e1074819f15e25214361", c.User.ID)
 
 	posts, err := dataStore.List("test", 0, 0)
 	assert.NoError(t, err)
@@ -71,6 +76,7 @@ func TestDisqus_Convert(t *testing.T) {
 			ID:   "disqus_328c8b68974aef73785f6b38c3d3fedfdf941434",
 			IP:   "178.178.178.178",
 		},
+		Imported: true,
 	}
 	exp0.Timestamp, _ = time.Parse("2006-01-02T15:04:05Z", "2011-08-31T15:16:29Z")
 	assert.Equal(t, exp0, res[0])
@@ -169,10 +175,9 @@ var xmlTestDisqus = `<?xml version="1.0" encoding="utf-8"?>
 		<isDeleted>false</isDeleted>
 		<isSpam>false</isSpam>
 		<author>
-			<email>dmitri.noname@gmail.com</email>
-			<name>Dmitry Noname</name>
+			<email>john.nousername@gmail.com</email>
+			<name>No Username</name>
 			<isAnonymous>false</isAnonymous>
-			<username>google-74b9e7568ef6860e93862c5d77590123</username>
 		</author>
 		<ipAddress>89.89.89.139</ipAddress>
 		<thread dsq:id="247918464"/>

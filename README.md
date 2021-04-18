@@ -1,10 +1,11 @@
-# remark42 [![Build Status](https://github.com/umputun/remark42/workflows/build/badge.svg)](https://github.com/umputun/remark42/actions) [![Go Report Card](https://goreportcard.com/badge/github.com/umputun/remark42)](https://goreportcard.com/report/github.com/umputun/remark42) [![Coverage Status](https://coveralls.io/repos/github/umputun/remark42/badge.svg?branch=master)](https://coveralls.io/github/umputun/remark42?branch=master)
+# remark42 [![Build Status](https://github.com/umputun/remark42/workflows/build/badge.svg)](https://github.com/umputun/remark42/actions) [![Go Report Card](https://goreportcard.com/badge/github.com/umputun/remark42)](https://goreportcard.com/report/github.com/umputun/remark42) [![Coverage Status](https://coveralls.io/repos/github/umputun/remark42/badge.svg?branch=master)](https://coveralls.io/github/umputun/remark42?branch=master) [![codecov](https://codecov.io/gh/umputun/remark42/branch/master/graph/badge.svg)](https://codecov.io/gh/umputun/remark42)
+
 
 
 
 Remark42 is a self-hosted, lightweight, and simple (yet functional) comment engine, which doesn't spy on users. It can be embedded into blogs, articles or any other place where readers add comments.
 
-* Social login via Google, Twitter, Facebook, GitHub and Yandex
+* Social login via Google, Twitter, Facebook, Microsoft, GitHub and Yandex
 * Login via email
 * Optional anonymous access
 * Multi-level nested comments with both tree and plain presentations
@@ -109,10 +110,12 @@ _this is the recommended way to run remark42_
 | store.type              | STORE_TYPE              | `bolt`                   | type of storage, `bolt` or `rpc`                |
 | store.bolt.path         | STORE_BOLT_PATH         | `./var`                  | path to data directory                          |
 | store.bolt.timeout      | STORE_BOLT_TIMEOUT      | `30s`                    | boltdb access timeout                           |
-| admin.shared.id         | ADMIN_SHARED_ID         |                          | admin names (list of user ids), _multi_         |
-| admin.shared.email      | ADMIN_SHARED_EMAIL      | `admin@${REMARK_URL}`    | admin email                                     |
+| admin.shared.id         | ADMIN_SHARED_ID         |                          | admin ids (list of user ids), _multi_           |
+| admin.shared.email      | ADMIN_SHARED_EMAIL      | `admin@${REMARK_URL}`    | admin emails, _multi_                           |
 | backup                  | BACKUP_PATH             | `./var/backup`           | backups location                                |
 | max-back                | MAX_BACKUP_FILES        | `10`                     | max backup files to keep                        |
+| cache.type              | CACHE_TYPE              | `mem`                    | type of cache, `redis_pub_sub` or `mem` or `none` |
+| cache.redis_addr        | CACHE_REDIS_ADDR        | `127.0.0.1:6379`         | address of redis PubSub instance, turn `redis_pub_sub` cache on for distributed cache |
 | cache.max.items         | CACHE_MAX_ITEMS         | `1000`                   | max number of cached items, `0` - unlimited     |
 | cache.max.value         | CACHE_MAX_VALUE         | `65536`                  | max size of cached value, `0` - unlimited       |
 | cache.max.size          | CACHE_MAX_SIZE          | `50000000`               | max size of all cached values, `0` - unlimited  |
@@ -131,12 +134,16 @@ _this is the recommended way to run remark42_
 | image.resize-height     | IMAGE_RESIZE_HEIGHT     | `900`                    | height of resized image                         |
 | auth.ttl.jwt            | AUTH_TTL_JWT            | `5m`                     | jwt TTL                                         |
 | auth.ttl.cookie         | AUTH_TTL_COOKIE         | `200h`                   | cookie TTL                                      |
+| auth.send-jwt-header    | AUTH_SEND_JWT_HEADER    | `false`                  | send JWT as a header instead of cookie          |
+| auth.same-site          | AUTH_SAME_SITE          | `default`                | set same site policy for cookies (`default`, `none`, `lax` or `strict`)|
 | auth.google.cid         | AUTH_GOOGLE_CID         |                          | Google OAuth client ID                          |
 | auth.google.csec        | AUTH_GOOGLE_CSEC        |                          | Google OAuth client secret                      |
 | auth.facebook.cid       | AUTH_FACEBOOK_CID       |                          | Facebook OAuth client ID                        |
 | auth.facebook.csec      | AUTH_FACEBOOK_CSEC      |                          | Facebook OAuth client secret                    |
-| auth.github.cid         | AUTH_GITHUB_CID         |                          | Github OAuth client ID                          |
-| auth.github.csec        | AUTH_GITHUB_CSEC        |                          | Github OAuth client secret                      |
+| auth.microsoft.cid      | AUTH_MICROSOFT_CID      |                          | Microsoft OAuth client ID                       |
+| auth.microsoft.csec     | AUTH_MICROSOFT_CSEC     |                          | Microsoft OAuth client secret                   |
+| auth.github.cid         | AUTH_GITHUB_CID         |                          | GitHub OAuth client ID                          |
+| auth.github.csec        | AUTH_GITHUB_CSEC        |                          | GitHub OAuth client secret                      |
 | auth.twitter.cid        | AUTH_TWITTER_CID        |                          | Twitter Consumer API Key                        |
 | auth.twitter.csec       | AUTH_TWITTER_CSEC       |                          | Twitter Consumer API Secret key                 |
 | auth.yandex.cid         | AUTH_YANDEX_CID         |                          | Yandex OAuth client ID                          |
@@ -177,12 +184,15 @@ _this is the recommended way to run remark42_
 | critical-score          | CRITICAL_SCORE          | `-10`                    | critical score threshold                        |
 | positive-score          | POSITIVE_SCORE          | `false`                  | restricts comment's score to be only positive   |
 | restricted-words        | RESTRICTED_WORDS        |                          | words banned in comments (can use `*`), _multi_ |
+| restricted-names        | RESTRICTED_NAMES        |                          | names prohibited to use by the user, _multi_    |
 | edit-time               | EDIT_TIME               | `5m`                     | edit window                                     |
 | read-age                | READONLY_AGE            |                          | read-only age of comments, days                 |
 | image-proxy.http2https  |  IMAGE_PROXY_HTTP2HTTPS | `false`                  | enable http->https proxy for images             |
 | image-proxy.cache-external | IMAGE_PROXY_CACHE_EXTERNAL | `false`            | enable caching external images to current image storage |
 | emoji                   | EMOJI                   | `false`                  | enable emoji support                            |
 | simple-view             | SIMPLE_VIEW             | `false`                  | minimized UI with basic info only               |
+| proxy-cors              | PROXY_CORS              | `false`                  | disable internal CORS and delegate it to proxy  |
+| allowed-hosts           | ALLOWED_HOSTS           |  enable all              | limit hosts/sources allowed to embed comments   |
 | port                    | REMARK_PORT             | `8080`                   | web server port                                 |
 | web-root                | REMARK_WEB_ROOT         | `./web`                  | web server root directory                       |
 | update-limit            | UPDATE_LIMIT            | `0.5`                    | updates/sec limit                               |
@@ -284,6 +294,14 @@ _instructions for google oauth2 setup borrowed from [oauth2_proxy](https://githu
 1.  Under **"Facebook login"** / **"Settings"** fill "Valid OAuth redirect URIs" with your callback url constructed as domain + `/auth/facebook/callback`
 1.  Select **"App Review"** and turn public flag on. This step may ask you to provide a link to your privacy policy.
 
+#### Microsoft Auth Provider
+
+1.  Register a new application [using the Azure portal](https://docs.microsoft.com/en-us/graph/auth-register-app-v2).
+2.  Under **"Authentication/Platform configurations/Web"** enter the correct url constructed as domain + `/auth/microsoft/callback`. i.e. `https://example.mysite.com/auth/microsoft/callback`
+3.  In "Overview" take note of the **Application (client) ID**
+4.  Choose the new project from the top right project dropdown (only if another project is selected)
+5.  Select "Certificates & secrets" and click on "+ New Client Secret".
+
 ##### Twitter Auth Provider
 
 1.	Create a new twitter application https://developer.twitter.com/en/apps
@@ -312,11 +330,16 @@ Optionally, anonymous access can be turned on. In this case an extra `anonymous`
 - name should be at least 3 characters long
 - name has to start from the letter and contains letters, numbers, underscores and spaces only.
 
+### Importing comments
+
+Remark supports importing comments from Disqus, WordPress or native backup format.
+All imported comments has `Imported` field set to `true`.
+
 #### Initial import from Disqus
 
 1.  Disqus provides an export of all comments on your site in a g-zipped file. This is found in your Moderation panel at Disqus Admin > Setup > Export. The export will be sent into a queue and then emailed to the address associated with your account once it's ready. Direct link to export will be something like `https://<siteud>.disqus.com/admin/discussions/export/`. See [importing-exporting](https://help.disqus.com/customer/portal/articles/1104797-importing-exporting) for more details.
 2.  Move this file to your remark42 host within `./var` and unzip, i.e. `gunzip <disqus-export-name>.xml.gz`.
-3.  Run import command - `docker exec -it remark42 import -p disqus -f {disqus-export-name}.xml -s {your site id}`
+3.  Run import command - `docker exec -it remark42 import -p disqus -f /srv/var/{disqus-export-name}.xml -s {your site id}`
 
 #### Initial import from WordPress
 
@@ -436,18 +459,14 @@ Add this snippet to the bottom of web page:
     max_shown_comments: 10, // optional param; if it isn't defined default value (15) will be used
     theme: 'dark', // optional param; if it isn't defined default value ('light') will be used
     page_title: 'Moving to Remark42', // optional param; if it isn't defined `document.title` will be used
-    locale: 'en' // set up locale and language, if it isn't defined default value ('en') will be used
+    locale: 'en', // set up locale and language, if it isn't defined default value ('en') will be used
+    show_email_subscription: false // optional param; by default it is `true` and you can see email subscription feature
+                                   // in interface when enable it from backend side
+                                   // if you set this param in `false` you will get notifications email notifications as admin
+                                   // but your users won't have interface for subscription
   };
-
-  (function(c) {
-    for(var i = 0; i < c.length; i++){
-      var d = document, s = d.createElement('script');
-      s.src = remark_config.host + '/web/' +c[i] +'.js';
-      s.defer = true;
-      (d.head || d.body).appendChild(s);
-    }
-  })(remark_config.components || ['embed']);
 </script>
+<script>!function(e,n){for(var o=0;o<e.length;o++){var r=n.createElement("script"),c=".js",d=n.head||n.body;"noModule"in r?(r.type="module",c=".mjs"):r.async=!0,r.defer=!0,r.src=remark_config.host+"/web/"+e[o]+c,d.appendChild(r)}}(remark_config.components||["embed"],document);</script>
 ```
 
 And then add this node in the place where you want to see Remark42 widget:
@@ -457,6 +476,8 @@ And then add this node in the place where you want to see Remark42 widget:
 ```
 
 After that widget will be rendered inside this node.
+
+If you want to set this up on a Single Page App, see [appropriate doc page](https://remark42.com/docs/latest/spa/).
 
 ##### Themes
 
@@ -491,15 +512,6 @@ Add this snippet to the bottom of web page, or adjust already present `remark_co
     site_id: 'YOUR_SITE_ID',
     components: ['last-comments']
   };
-
-  (function(c) {
-    for(var i = 0; i < c.length; i++){
-      var d = document, s = d.createElement('script');
-      s.src = remark_config.host + '/web/' +c[i] +'.js';
-      s.defer = true;
-      (d.head || d.body).appendChild(s);
-    }
-  })(remark_config.components || ['embed']);
 </script>
 ```
 
@@ -524,15 +536,6 @@ Add this snippet to the bottom of web page, or adjust already present `remark_co
     site_id: 'YOUR_SITE_ID',
     components: ['counter']
   };
-
-  (function(c) {
-    for(var i = 0; i < c.length; i++){
-      var d = document, s = d.createElement('script');
-      s.src = remark_config.host + '/web/' +c[i] +'.js';
-      s.defer = true;
-      (d.head || d.body).appendChild(s);
-    }
-  })(remark_config.components || ['embed']);
 </script>
 ```
 
@@ -562,11 +565,14 @@ To bring it up run:
 
 ```bash
 # if you mainly work on backend
-docker-compose -f compose-dev-backend.yml build
-docker-compose -f compose-dev-backend.yml up
+cp compose-dev-backend.yml compose-private.yml
 # if you mainly work on frontend
-docker-compose -f compose-dev-frontend.yml build
-docker-compose -f compose-dev-frontend.yml up
+cp compose-dev-frontend.yml compose-private.yml
+# now, edit / debug `compose-private.yml` to your heart's content.
+
+# build and run
+docker-compose -f compose-private.yml build
+docker-compose -f compose-private.yml up
 ```
 
 It starts Remark42 on `127.0.0.1:8080` and adds local OAuth2 provider “Dev”.
@@ -589,7 +595,7 @@ It stars backend service with embedded bolt store on port `8080` with basic auth
 
 #### Developer guide
 
-Frontend guide can be found here: [./frontend/Readme.md](./frontend/Readme.md)
+Frontend guide can be found here: [./frontend/README.md](./frontend/README.md)
 
 #### Build
 You should have at least 2GB RAM or swap enabled for building
@@ -616,7 +622,10 @@ You can attach to locally running backend by providing `REMARK_URL` environment 
 npx cross-env REMARK_URL=http://127.0.0.1:8080 npm start
 ```
 
-The best way for start local developer enviroment:
+**Note** If you want to redefine env variables such as `PORT` on your local instance you can add `.env` file
+to `./frontend` folder and rewrite variables as you wish. For such functional we use `dotenv`
+
+The best way for start local developer environment:
 ```sh
 cp compose-dev-frontend.yml compose-private-frontend.yml
 docker-compose -f compose-private-frontend.yml up --build

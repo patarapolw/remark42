@@ -1,9 +1,9 @@
-import * as api from '@app/common/api';
-import { User, BlockedUser, AuthProvider, BlockTTL } from '@app/common/types';
-import { ttlToTime } from '@app/utils/ttl-to-time';
-import getHiddenUsers from '@app/utils/get-hidden-users';
-import { LS_HIDDEN_USERS_KEY } from '@app/common/constants';
-import { setItem } from '@app/common/local-storage';
+import * as api from 'common/api';
+import { User, BlockedUser, BlockTTL } from 'common/types';
+import { ttlToTime } from 'utils/ttl-to-time';
+import getHiddenUsers from 'utils/get-hidden-users';
+import { LS_HIDDEN_USERS_KEY } from 'common/constants';
+import { setItem } from 'common/local-storage';
 
 import { StoreAction } from '../index';
 import {
@@ -17,40 +17,28 @@ import {
   USER_SUBSCRIPTION_SET,
   USER_SET_ACTION,
 } from './types';
-import { unsetCommentMode, fetchComments } from '../comments/actions';
-import { updateProvider } from '../provider/actions';
+import { fetchComments } from '../comments/actions';
 import { COMMENTS_PATCH } from '../comments/types';
 
-function setUser(user: User | null = null) {
+export function setUser(user: User | null = null): USER_SET_ACTION {
   return {
     type: USER_SET,
     user,
-  } as USER_SET_ACTION;
+  };
 }
 
-export const fetchUser = (): StoreAction<Promise<User | null>> => async dispatch => {
+export const fetchUser = (): StoreAction<Promise<User | null>> => async (dispatch) => {
   const user = await api.getUser();
   dispatch(setUser(user));
   return user;
 };
 
-export const logIn = (provider: AuthProvider): StoreAction<Promise<User | null>> => async dispatch => {
-  const user = await api.logIn(provider);
-
-  dispatch(updateProvider({ name: provider.name }));
+export const signin = (user: User): StoreAction<Promise<void>> => async (dispatch) => {
   dispatch(setUser(user));
   dispatch(fetchComments());
-
-  return user;
 };
 
-export const logout = (): StoreAction<Promise<void>> => async dispatch => {
-  await api.logOut();
-  dispatch(unsetCommentMode());
-  dispatch(setUser());
-};
-
-export const fetchBlockedUsers = (): StoreAction<Promise<BlockedUser[]>> => async dispatch => {
+export const fetchBlockedUsers = (): StoreAction<Promise<BlockedUser[]>> => async (dispatch) => {
   const list = (await api.getBlocked()) || [];
 
   dispatch({ type: USER_BANLIST_SET, list });
@@ -58,11 +46,9 @@ export const fetchBlockedUsers = (): StoreAction<Promise<BlockedUser[]>> => asyn
   return list;
 };
 
-export const blockUser = (
-  id: User['id'],
-  name: string,
-  ttl: BlockTTL
-): StoreAction<Promise<void>> => async dispatch => {
+export const blockUser = (id: User['id'], name: string, ttl: BlockTTL): StoreAction<Promise<void>> => async (
+  dispatch
+) => {
   await api.blockUser(id, ttl);
   dispatch({
     type: USER_BAN,
@@ -78,19 +64,19 @@ export const unblockUser = (id: User['id']): StoreAction<Promise<void>> => async
   await api.unblockUser(id);
   dispatch({ type: USER_UNBAN, id });
   const comments = Object.values(getState().comments.allComments);
-  const userComments = comments.filter(comment => comment.user.id === id);
+  const userComments = comments.filter((comment) => comment.user.id === id);
 
   if (!userComments.length) return;
   const user = comments[0].user;
 
   dispatch({
     type: COMMENTS_PATCH,
-    ids: userComments.map(c => c.id),
+    ids: userComments.map((c) => c.id),
     patch: { user: { ...user, block: false } },
   });
 };
 
-export const fetchHiddenUsers = (): StoreAction<void> => dispatch => {
+export const fetchHiddenUsers = (): StoreAction<void> => (dispatch) => {
   const hiddenUsers = getHiddenUsers();
 
   dispatch({ type: USER_HIDELIST_SET, payload: hiddenUsers });
@@ -103,8 +89,8 @@ export const hideUser = (user: User): StoreAction<void> => (dispatch, getState) 
   setItem(LS_HIDDEN_USERS_KEY, JSON.stringify(hiddenUsers));
 
   const ids = Object.values(getState().comments.allComments)
-    .filter(c => c.user.id === user.id)
-    .map(c => c.id);
+    .filter((c) => c.user.id === user.id)
+    .map((c) => c.id);
 
   dispatch({ type: USER_HIDE, user });
   dispatch({ type: COMMENTS_PATCH, ids, patch: { hidden: true } });
@@ -133,14 +119,14 @@ export const setVerifiedStatus = (id: User['id'], status: boolean): StoreAction<
     await api.removeVerifiedStatus(id);
   }
   const comments = Object.values(getState().comments.allComments);
-  const userComments = comments.filter(c => c.user.id === id);
+  const userComments = comments.filter((c) => c.user.id === id);
 
   if (!userComments.length) return;
   const user = userComments[0].user;
 
   dispatch({
     type: COMMENTS_PATCH,
-    ids: userComments.map(c => c.id),
+    ids: userComments.map((c) => c.id),
     patch: { user: { ...user, verified: status } },
   });
 };

@@ -1,30 +1,29 @@
-/** @jsx createElement */
-import { createElement, Component, createRef, Fragment } from 'preact';
+import { h, Component, createRef, Fragment } from 'preact';
 import { FormattedMessage, IntlShape, defineMessages } from 'react-intl';
 import b, { Mix } from 'bem-react-helper';
 
-import { User, Theme, Image, ApiError } from '@app/common/types';
-import { StaticStore } from '@app/common/static_store';
-import { pageTitle } from '@app/common/settings';
-import { extractErrorMessageFromResponse } from '@app/utils/errorUtils';
-import { isUserAnonymous } from '@app/utils/isUserAnonymous';
-import { sleep } from '@app/utils/sleep';
-import { replaceSelection } from '@app/utils/replaceSelection';
-import { Button } from '@app/components/button';
-import Auth from '@app/components/auth';
-import { getJsonItem, updateJsonItem } from '@app/common/local-storage';
-import { LS_SAVED_COMMENT_VALUE } from '@app/common/constants';
+import { User, Theme, Image, ApiError } from 'common/types';
+import { StaticStore } from 'common/static-store';
+import { pageTitle } from 'common/settings';
+import { extractErrorMessageFromResponse } from 'utils/errorUtils';
+import { isUserAnonymous } from 'utils/isUserAnonymous';
+import { sleep } from 'utils/sleep';
+import { replaceSelection } from 'utils/replaceSelection';
+import { Button } from 'components/button';
+import TextareaAutosize from 'components/textarea-autosize';
+import Auth from 'components/auth';
+import { getJsonItem, updateJsonItem } from 'common/local-storage';
+import { LS_SAVED_COMMENT_VALUE } from 'common/constants';
 
 import { SubscribeByEmail } from './__subscribe-by-email';
 import { SubscribeByRSS } from './__subscribe-by-rss';
 
 import MarkdownToolbar from './markdown-toolbar';
-import TextareaAutosize from './textarea-autosize';
 import { TextExpander } from './text-expander';
 
 let textareaId = 0;
 
-export interface Props {
+export type CommentFormProps = {
   id: string;
   user: User | null;
   errorMessage?: string;
@@ -41,9 +40,9 @@ export interface Props {
   onCancel?: () => void;
   uploadImage?: (image: File) => Promise<Image>;
   intl: IntlShape;
-}
+};
 
-export interface State {
+export type CommentFormState = {
   preview: string | null;
   isErrorShown: boolean;
   /** error message, if contains newlines, it will be splitted to multiple errors */
@@ -51,12 +50,11 @@ export interface State {
   /** prevents error hiding on input event */
   errorLock: boolean;
   isDisabled: boolean;
-  maxLength: number;
   /** main input value */
   text: string;
   /** override main button text */
   buttonText: null | string;
-}
+};
 
 const ImageMimeRegex = /image\//i;
 
@@ -100,22 +98,18 @@ export const messages = defineMessages({
   },
 });
 
-export class CommentForm extends Component<Props, State> {
+export class CommentForm extends Component<CommentFormProps, CommentFormState> {
   /** reference to textarea element */
-  textAreaRef = createRef<TextareaAutosize>();
+  textareaRef = createRef<HTMLTextAreaElement>();
   textareaId: string;
 
-  constructor(props: Props) {
+  constructor(props: CommentFormProps) {
     super(props);
     textareaId = textareaId + 1;
     this.textareaId = `textarea_${textareaId}`;
 
-    const savedComments = getJsonItem(LS_SAVED_COMMENT_VALUE);
-    let text = '';
-
-    if (savedComments !== null && savedComments[props.id]) {
-      text = savedComments[props.id];
-    }
+    const savedComments = getJsonItem<Record<string, string>>(LS_SAVED_COMMENT_VALUE);
+    let text = savedComments?.[props.id] ?? '';
 
     if (props.value) {
       text = props.value;
@@ -127,7 +121,6 @@ export class CommentForm extends Component<Props, State> {
       errorMessage: null,
       errorLock: false,
       isDisabled: false,
-      maxLength: StaticStore.config.max_comment_size,
       text,
       buttonText: null,
     };
@@ -142,10 +135,9 @@ export class CommentForm extends Component<Props, State> {
     this.onPaste = this.onPaste.bind(this);
   }
 
-  componentWillReceiveProps(nextProps: Props) {
+  componentWillReceiveProps(nextProps: CommentFormProps) {
     if (nextProps.value !== this.props.value) {
       this.setState({ text: nextProps.value || '' });
-      this.props.autofocus && this.textAreaRef.current && this.textAreaRef.current.focus();
     }
     if (nextProps.user && !this.props.value) {
       this.setState({
@@ -155,7 +147,7 @@ export class CommentForm extends Component<Props, State> {
     }
   }
 
-  shouldComponentUpdate(nextProps: Props, nextState: State) {
+  shouldComponentUpdate(nextProps: CommentFormProps, nextState: CommentFormState) {
     const userId = this.props.user !== null && this.props.user.id;
     const nextUserId = nextProps.user !== null && nextProps.user.id;
 
@@ -178,13 +170,14 @@ export class CommentForm extends Component<Props, State> {
 
   onInput = (e: Event) => {
     const { value } = e.target as HTMLInputElement;
+    const text = value.substr(0, StaticStore.config.max_comment_size);
 
     updateJsonItem(LS_SAVED_COMMENT_VALUE, { [this.props.id]: value });
 
     if (this.state.errorLock) {
       this.setState({
         preview: null,
-        text: value,
+        text,
       });
       return;
     }
@@ -193,7 +186,7 @@ export class CommentForm extends Component<Props, State> {
       isErrorShown: false,
       errorMessage: null,
       preview: null,
-      text: value,
+      text,
     });
   };
 
@@ -220,24 +213,26 @@ export class CommentForm extends Component<Props, State> {
     this.setState({ isDisabled: true, isErrorShown: false, text });
     try {
       await this.props.onSubmit(text, pageTitle || document.title);
-      updateJsonItem<Record<string, string>>(LS_SAVED_COMMENT_VALUE, data => {
-        delete data[this.props.id];
-
-        return data;
-      });
-      this.setState({ preview: null, text: '' });
     } catch (e) {
       this.setState({
         isErrorShown: true,
         errorMessage: extractErrorMessageFromResponse(e, this.props.intl),
       });
+      return;
     }
 
-    this.setState({ isDisabled: false });
+    updateJsonItem<Record<string, string> | null>(LS_SAVED_COMMENT_VALUE, (data) => {
+      if (data === null) {
+        return null;
+      }
+      delete data[this.props.id];
+      return data;
+    });
+    this.setState({ isDisabled: false, preview: null, text: '' });
   };
 
   getPreview() {
-    const text = this.textAreaRef.current ? this.textAreaRef.current.getValue() : this.state.text;
+    const text = this.textareaRef.current?.value ?? this.state.text;
 
     if (!text || !text.trim()) return;
 
@@ -245,7 +240,7 @@ export class CommentForm extends Component<Props, State> {
 
     this.props
       .getPreview(text)
-      .then(preview => this.setState({ preview }))
+      .then((preview) => this.setState({ preview }))
       .catch(() => {
         this.setState({ isErrorShown: true, errorMessage: null });
       });
@@ -261,7 +256,7 @@ export class CommentForm extends Component<Props, State> {
       return;
     }
     this.setState({
-      errorMessage: this.state.errorMessage + '\n' + errors.join('\n'),
+      errorMessage: `${this.state.errorMessage}\n${errors.join('\n')}`,
       isErrorShown: true,
     });
   }
@@ -270,10 +265,10 @@ export class CommentForm extends Component<Props, State> {
     if (!this.props.user) e.preventDefault();
     if (!this.props.uploadImage) return;
     if (StaticStore.config.max_image_size === 0) return;
-    if (!this.textAreaRef) return;
+    if (!this.textareaRef.current) return;
     if (!e.dataTransfer) return;
     const items = Array.from(e.dataTransfer.items);
-    if (Array.from(items).filter(i => i.kind === 'file' && ImageMimeRegex.test(i.type)).length === 0) return;
+    if (Array.from(items).filter((i) => i.kind === 'file' && ImageMimeRegex.test(i.type)).length === 0) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
   }
@@ -293,12 +288,36 @@ export class CommentForm extends Component<Props, State> {
     if (StaticStore.config.max_image_size === 0) return;
     if (!e.dataTransfer) return;
 
-    const data = Array.from(e.dataTransfer.files).filter(f => ImageMimeRegex.test(f.type));
+    const data = Array.from(e.dataTransfer.files).filter((f) => ImageMimeRegex.test(f.type));
     if (data.length === 0) return;
 
     e.preventDefault();
 
     this.uploadImages(data);
+  }
+
+  /** returns selection range of a textarea */
+  getSelection(): [number, number] {
+    const textarea = this.textareaRef.current;
+
+    if (textarea) {
+      return [textarea.selectionStart, textarea.selectionEnd];
+    }
+
+    throw new Error('No textarea element reference exists');
+  }
+
+  /** sets selection range of a textarea */
+  setSelection(selection: [number, number]) {
+    const textarea = this.textareaRef.current;
+
+    if (textarea) {
+      textarea.selectionStart = selection[0];
+      textarea.selectionEnd = selection[1];
+      return;
+    }
+
+    throw new Error('No textarea element reference exists');
   }
 
   /** wrapper with error handling for props.uploadImage */
@@ -318,14 +337,12 @@ export class CommentForm extends Component<Props, State> {
   async uploadImages(files: File[]) {
     const intl = this.props.intl;
     if (!this.props.uploadImage) return;
-    if (!this.textAreaRef.current) return;
+    if (!this.textareaRef.current) return;
 
     /** Human readable image size limit, i.e 5MB */
-    const maxImageSizeString = (StaticStore.config.max_image_size / 1024 / 1024).toFixed(2) + 'MB';
+    const maxImageSizeString = `${(StaticStore.config.max_image_size / 1024 / 1024).toFixed(2)}MB`;
     /** upload delay to avoid server rate limiter */
     const uploadDelay = 5000;
-
-    const isSelectionSupported = this.textAreaRef.current.isSelectionSupported();
 
     this.setState({
       errorLock: true,
@@ -334,43 +351,6 @@ export class CommentForm extends Component<Props, State> {
       isDisabled: true,
       buttonText: intl.formatMessage(messages.uploading),
     });
-
-    // TODO: remove legacy code, now we don't support IE
-    // fallback for ie < 9
-    if (!isSelectionSupported) {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const isFirst = i === 0;
-        const placeholderStart = this.state.text.length === 0 ? '' : '\n';
-
-        if (file.size > StaticStore.config.max_image_size) {
-          this.appendError(
-            intl.formatMessage(messages.exceededSize, {
-              fileName: file.name,
-              maxImageSize: maxImageSizeString,
-            })
-          );
-          continue;
-        }
-
-        !isFirst && (await sleep(uploadDelay));
-
-        const result = await this.uploadImage(file);
-
-        if (result instanceof Error) {
-          this.appendError(result.message);
-          continue;
-        }
-
-        const markdownString = `${placeholderStart}![${result.name}](${result.url})`;
-        this.setState({
-          text: this.state.text + markdownString,
-        });
-      }
-
-      this.setState({ errorLock: false, isDisabled: false, buttonText: null });
-      return;
-    }
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -381,7 +361,7 @@ export class CommentForm extends Component<Props, State> {
         fileName: file.name,
       })}]()`;
       const uploadPlaceholderLength = uploadPlaceholder.length;
-      const selection = this.textAreaRef.current.getSelection();
+      const selection = this.getSelection();
       /** saved selection in case of error */
       const originalText = this.state.text;
       const restoreSelection = async () => {
@@ -390,7 +370,7 @@ export class CommentForm extends Component<Props, State> {
         });
         /** sleeping awhile so textarea catch state change and its selection */
         await sleep(100);
-        this.textAreaRef.current!.setSelection(selection);
+        this.setSelection(selection);
       };
 
       if (file.size > StaticStore.config.max_image_size) {
@@ -403,8 +383,8 @@ export class CommentForm extends Component<Props, State> {
         continue;
       }
 
-      this.setState({
-        text: replaceSelection(this.state.text, selection, uploadPlaceholder),
+      this.setState({ text: replaceSelection(this.state.text, selection, uploadPlaceholder) }, () => {
+        updateJsonItem(LS_SAVED_COMMENT_VALUE, { [this.props.id]: this.state.text });
       });
 
       !isFirst && (await sleep(uploadDelay));
@@ -418,13 +398,22 @@ export class CommentForm extends Component<Props, State> {
       }
 
       const markdownString = `${placeholderStart}![${result.name}](${result.url})`;
-      this.setState({
-        text: replaceSelection(this.state.text, [selection[0], selection[0] + uploadPlaceholderLength], markdownString),
-      });
+      this.setState(
+        {
+          text: replaceSelection(
+            this.state.text,
+            [selection[0], selection[0] + uploadPlaceholderLength],
+            markdownString
+          ),
+        },
+        () => {
+          updateJsonItem(LS_SAVED_COMMENT_VALUE, { [this.props.id]: this.state.text });
+        }
+      );
       /** sleeping awhile so textarea catch state change and its selection */
       await sleep(100);
       const selectionPointer = selection[0] + markdownString.length;
-      this.textAreaRef.current.setSelection([selectionPointer, selectionPointer]);
+      this.setSelection([selectionPointer, selectionPointer]);
     }
 
     this.setState({ errorLock: false, isDisabled: false, buttonText: null });
@@ -446,37 +435,38 @@ export class CommentForm extends Component<Props, State> {
     </div>
   );
 
-  render(props: Props, { isDisabled, isErrorShown, errorMessage, preview, maxLength, text, buttonText }: State) {
-    const charactersLeft = maxLength - text.length;
-    errorMessage = props.errorMessage || errorMessage;
+  render() {
+    const { theme, mode, simpleView, mix, uploadImage, autofocus, user, intl } = this.props;
+    const { isDisabled, isErrorShown, preview, text, buttonText } = this.state;
+    const charactersLeft = StaticStore.config.max_comment_size - text.length;
+    const errorMessage = this.props.errorMessage || this.state.errorMessage;
     const Labels = {
       main: <FormattedMessage id="commentForm.send" defaultMessage="Send" />,
       edit: <FormattedMessage id="commentForm.save" defaultMessage="Save" />,
       reply: <FormattedMessage id="commentForm.reply" defaultMessage="Reply" />,
     };
-    const label = buttonText || Labels[props.mode || 'main'];
-    const intl = this.props.intl;
+    const label = buttonText || Labels[mode || 'main'];
     const placeholderMessage = intl.formatMessage(messages.placeholder);
     return (
       <form
         className={b('comment-form', {
           mods: {
-            theme: props.theme,
-            type: props.mode || 'reply',
-            simple: props.simpleView,
+            theme,
+            type: mode || 'reply',
+            simple: simpleView,
           },
-          mix: props.mix,
+          mix,
         })}
         onSubmit={this.send}
         aria-label={intl.formatMessage(messages.newComment)}
         onDragOver={this.onDragOver}
         onDrop={this.onDrop}
       >
-        {!props.simpleView && (
+        {!simpleView && (
           <div className="comment-form__control-panel">
             <MarkdownToolbar
               intl={intl}
-              allowUpload={Boolean(this.props.uploadImage)}
+              allowUpload={Boolean(uploadImage)}
               uploadImages={this.uploadImages}
               textareaId={this.textareaId}
             />
@@ -486,16 +476,15 @@ export class CommentForm extends Component<Props, State> {
           <TextExpander>
             <TextareaAutosize
               id={this.textareaId}
+              ref={this.textareaRef}
               onPaste={this.onPaste}
-              ref={this.textAreaRef}
               className="comment-form__field"
               placeholder={placeholderMessage}
               value={text}
-              maxLength={maxLength}
               onInput={this.onInput}
               onKeyDown={this.onKeyDown}
               disabled={isDisabled}
-              autofocus={!!props.autofocus}
+              autofocus={!!autofocus}
               spellcheck={true}
             />
           </TextExpander>
@@ -503,20 +492,20 @@ export class CommentForm extends Component<Props, State> {
         </div>
 
         {(isErrorShown || !!errorMessage) &&
-          (errorMessage || intl.formatMessage(messages.unexpectedError)).split('\n').map(e => (
+          (errorMessage || intl.formatMessage(messages.unexpectedError)).split('\n').map((e) => (
             <p className="comment-form__error" role="alert" key={e}>
               {e}
             </p>
           ))}
 
         <div className="comment-form__actions">
-          {this.props.user ? (
-            <Fragment>
+          {user ? (
+            <>
               <div>
-                {!props.simpleView && (
+                {!simpleView && (
                   <Button
                     kind="secondary"
-                    theme={props.theme}
+                    theme={theme}
                     size="large"
                     mix="comment-form__button"
                     disabled={isDisabled}
@@ -530,40 +519,43 @@ export class CommentForm extends Component<Props, State> {
                 </Button>
               </div>
 
-              {!props.simpleView && props.mode === 'main' && (
+              {!simpleView && mode === 'main' && (
                 <div className="comment-form__rss">
                   {this.renderMarkdownTip()}
                   <FormattedMessage id="commentForm.subscribe-by" defaultMessage="Subscribe by" />{' '}
-                  <SubscribeByRSS userId={props.user !== null ? props.user.id : null} />
-                  {StaticStore.config.email_notifications && (
-                    <Fragment>
+                  <SubscribeByRSS userId={user !== null ? user.id : null} />
+                  {StaticStore.config.email_notifications && StaticStore.query.show_email_subscription && (
+                    <>
                       {' '}
                       <FormattedMessage id="commentForm.subscribe-or" defaultMessage="or" /> <SubscribeByEmail />
-                    </Fragment>
+                    </>
                   )}
                 </div>
               )}
-            </Fragment>
+            </>
           ) : (
-            <Fragment>
+            <>
               <Auth />
               {this.renderMarkdownTip()}
-            </Fragment>
+            </>
           )}
         </div>
 
-        {// TODO: it can be more elegant;
-        // for example it can render full comment component here (or above textarea on mobile)
-        !!preview && (
-          <div className="comment-form__preview-wrapper">
-            <div
-              className={b('comment-form__preview', {
-                mix: b('raw-content', {}, { theme: props.theme }),
-              })}
-              dangerouslySetInnerHTML={{ __html: preview }}
-            />
-          </div>
-        )}
+        {
+          // TODO: it can be more elegant;
+          // for example it can render full comment component here (or above textarea on mobile)
+          !!preview && (
+            <div className="comment-form__preview-wrapper">
+              <div
+                className={b('comment-form__preview', {
+                  mix: b('raw-content', {}, { theme }),
+                })}
+                // eslint-disable-next-line react/no-danger
+                dangerouslySetInnerHTML={{ __html: preview }}
+              />
+            </div>
+          )
+        }
       </form>
     );
   }

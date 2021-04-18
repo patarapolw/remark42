@@ -1,20 +1,16 @@
-/** @jsx createElement */
-import { createElement } from 'preact';
+import { h } from 'preact';
 import { mount } from 'enzyme';
 import createMockStore from 'redux-mock-store';
 import { Middleware } from 'redux';
 import { Provider } from 'react-redux';
 import { IntlProvider } from 'react-intl';
 
-import enMessages from '@app/locales/en.json';
+import type { User } from 'common/types';
+import enMessages from 'locales/en.json';
 
 import AuthPanel, { Props } from './auth-panel';
-import { Button } from '../button';
-import { StaticStore } from '@app/common/static_store';
 
 const DefaultProps = {
-  providers: ['google', 'github'],
-  provider: { name: null },
   postInfo: {
     read_only: false,
     url: 'https://example.com',
@@ -62,30 +58,12 @@ describe('<AuthPanel />', () => {
         ...DefaultProps,
         user: null,
         postInfo: { ...DefaultProps.postInfo, read_only: true },
-        hiddenUsers: { hidden_joe: {} as any },
+        hiddenUsers: { hidden_joe: {} as User },
       } as Props);
 
       const adminAction = element.find('.auth-panel__admin-action');
 
       expect(adminAction.text()).toEqual('Show settings');
-    });
-
-    it('should render auth for read only post', () => {
-      StaticStore.config.auth_providers = ['google', 'github'];
-
-      const element = createWrapper({
-        ...DefaultProps,
-        user: null,
-        postInfo: { ...DefaultProps.postInfo, read_only: true },
-        hiddenUsers: { hidden_joe: {} as any },
-      } as Props);
-
-      const firstCol = element.find('.auth-panel__column').first();
-      const providerButtons = firstCol.find(Button);
-
-      expect(firstCol.text()).toStartWith('Login:');
-      expect(providerButtons.at(0).text()).toBe('Google');
-      expect(providerButtons.at(1).text()).toBe('GitHub');
     });
   });
 

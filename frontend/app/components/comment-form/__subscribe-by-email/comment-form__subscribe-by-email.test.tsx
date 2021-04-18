@@ -1,25 +1,34 @@
-/** @jsx createElement */
-import { createElement } from 'preact';
+import { h } from 'preact';
 import { mount } from 'enzyme';
 import { act } from 'preact/test-utils';
 import { Provider } from 'react-redux';
 import { Middleware } from 'redux';
 import createMockStore from 'redux-mock-store';
-
-import '@app/testUtils/mockApi';
-import { user, anonymousUser } from '@app/testUtils/mocks/user';
-import { validToken } from '@app/testUtils/mocks/jwt';
-
-import * as api from '@app/common/api';
-import { sleep } from '@app/utils/sleep';
-import { Input } from '@app/components/input';
-import { Button } from '@app/components/button';
-import { Dropdown } from '@app/components/dropdown';
-import TextareaAutosize from '@app/components/comment-form/textarea-autosize';
 import { IntlProvider } from 'react-intl';
-import enMessages from '../../../locales/en.json';
 
-import { SubscribeByEmail, SubscribeByEmailForm } from './';
+jest.mock('common/api');
+
+import { user, anonymousUser } from '__stubs__/user';
+import { validToken } from '__stubs__/jwt';
+import { emailVerificationForSubscribe, emailConfirmationForSubscribe, unsubscribeFromEmailUpdates } from 'common/api';
+import { sleep } from 'utils/sleep';
+import { Input } from 'components/input';
+import { Button } from 'components/button';
+import { Dropdown } from 'components/dropdown';
+import enMessages from 'locales/en.json';
+import { LS_EMAIL_KEY } from 'common/constants';
+
+import { SubscribeByEmail, SubscribeByEmailForm } from '.';
+
+const emailVerificationForSubscribeMock = (emailVerificationForSubscribe as unknown) as jest.Mock<
+  ReturnType<typeof emailVerificationForSubscribe>
+>;
+const emailConfirmationForSubscribeMock = (emailConfirmationForSubscribe as unknown) as jest.Mock<
+  ReturnType<typeof emailConfirmationForSubscribe>
+>;
+const unsubscribeFromEmailUpdatesMock = (unsubscribeFromEmailUpdates as unknown) as jest.Mock<
+  ReturnType<typeof unsubscribeFromEmailUpdates>
+>;
 
 const initialStore = {
   user,
@@ -35,7 +44,7 @@ const makeInputEvent = (value: string) => ({
   },
 });
 
-jest.mock('@app/utils/jwt', () => ({
+jest.mock('utils/jwt', () => ({
   isJwtExpired: jest.fn(() => false),
 }));
 
@@ -93,50 +102,48 @@ describe('<SubscribeByEmailForm/>', () => {
     const wrapper = createWrapper(store);
 
     expect(wrapper.find('.comment-form__subscribe-by-email_subscribed')).toHaveLength(1);
-    expect(wrapper.text()).toStartWith('You are subscribed on updates by email');
+    expect(wrapper.text().startsWith('You are subscribed on updates by email')).toBe(true);
   });
 
   it('should pass throw subscribe process', async () => {
     const wrapper = createWrapper();
 
-    const emailVerificationForSubscribe = jest.spyOn(api, 'emailVerificationForSubscribe');
-    const emailConfirmationForSubscribe = jest.spyOn(api, 'emailConfirmationForSubscribe');
-    const onInputEmail = wrapper.find(Input).prop('onInput');
+    const input = wrapper.find('input');
     const form = wrapper.find('form');
 
-    expect(onInputEmail).toBeFunction();
-
-    act(() => onInputEmail(makeInputEvent('some@email.com')));
-
-    expect(form).toHaveLength(1);
-
+    input.getDOMNode<HTMLInputElement>().value = 'some@email.com';
+    input.simulate('input');
     form.simulate('submit');
 
-    expect(emailVerificationForSubscribe).toHaveBeenCalledWith('some@email.com');
+    expect(emailVerificationForSubscribeMock).toHaveBeenCalledWith('some@email.com');
 
-    await sleep(0);
+    await sleep();
     wrapper.update();
 
-    const textarea = wrapper.find(TextareaAutosize);
-    const onInputToken = textarea.prop('onInput') as (e: any) => void;
-    const button = wrapper.find(Button);
+    const textarea = wrapper.find('textarea');
+    const button = wrapper.find('button');
 
-    expect(textarea).toHaveLength(1);
-    expect(onInputToken).toBeFunction();
     expect(button.at(0).text()).toEqual('Back');
     expect(button.at(1).text()).toEqual('Subscribe');
 
-    act(() => onInputToken(makeInputEvent('tokentokentoken')));
+    textarea.getDOMNode<HTMLTextAreaElement>().value = 'tokentokentoken';
+    textarea.simulate('input');
+    form.simulate('submit');
 
-    wrapper.find('form').simulate('submit');
-
-    expect(emailConfirmationForSubscribe).toHaveBeenCalledWith('tokentokentoken');
+    expect(emailConfirmationForSubscribeMock).toHaveBeenCalledWith('tokentokentoken');
 
     await sleep(0);
     wrapper.update();
 
-    expect(wrapper.text()).toStartWith('You have been subscribed on updates by email');
+    expect(wrapper.text().startsWith('You have been subscribed on updates by email')).toBe(true);
     expect(wrapper.find(Button).text()).toEqual('Unsubscribe');
+  });
+
+  it('should fill in email from local storage', async () => {
+    localStorage.setItem(LS_EMAIL_KEY, 'someone@email.com');
+    const wrapper = createWrapper();
+    const form = wrapper.find('form');
+    expect(form.find('input').props().value).toEqual('someone@email.com');
   });
 
   it('should send form by paste valid token', async () => {
@@ -144,7 +151,7 @@ describe('<SubscribeByEmailForm/>', () => {
     const onInputEmail = wrapper.find(Input).prop('onInput');
     const form = wrapper.find('form');
 
-    expect(onInputEmail).toBeFunction();
+    expect(typeof onInputEmail === 'function').toBe(true);
 
     act(() => onInputEmail(makeInputEvent('some@email.com')));
 
@@ -153,15 +160,15 @@ describe('<SubscribeByEmailForm/>', () => {
     await sleep(0);
     wrapper.update();
 
-    const textarea = wrapper.find(TextareaAutosize);
-    const onInputToken = textarea.prop('onInput') as (e: any) => void;
+    const textarea = wrapper.find('textarea');
 
-    act(() => onInputToken(makeInputEvent(validToken)));
+    textarea.getDOMNode<HTMLTextAreaElement>().value = validToken;
+    textarea.simulate('input');
 
     await sleep(0);
     wrapper.update();
 
-    expect(wrapper.text()).toStartWith('You have been subscribed on updates by email');
+    expect(wrapper.text().startsWith('You have been subscribed on updates by email')).toBe(true);
     expect(wrapper.find(Button).text()).toEqual('Unsubscribe');
   });
 
@@ -169,18 +176,17 @@ describe('<SubscribeByEmailForm/>', () => {
     const store = mockStore({ ...initialStore, user: { email_subscription: true } });
     const wrapper = createWrapper(store);
     const onClick = wrapper.find(Button).prop('onClick');
-    const unsubscribeFromEmailUpdates = jest.spyOn(api, 'unsubscribeFromEmailUpdates');
 
-    expect(onClick).toBeFunction();
+    expect(typeof onClick === 'function').toBe(true);
 
     act(() => onClick());
 
-    expect(unsubscribeFromEmailUpdates).toHaveBeenCalled();
+    expect(unsubscribeFromEmailUpdatesMock).toHaveBeenCalled();
 
     await sleep(0);
     wrapper.update();
 
-    expect(wrapper.text()).toStartWith('You have been unsubscribed by email to updates');
+    expect(wrapper.text().startsWith('You have been unsubscribed by email to updates')).toBe(true);
     expect(wrapper.find(Button).text()).toEqual('Close');
   });
 });

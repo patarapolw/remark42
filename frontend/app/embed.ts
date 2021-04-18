@@ -1,8 +1,5 @@
-/* eslint-disable no-console */
-import { BASE_URL, NODE_ID, COMMENT_NODE_CLASSNAME_PREFIX } from '@app/common/constants.config';
-import { UserInfo, Theme } from '@app/common/types';
-
-let initDataAnimationTimeout: NodeJS.Timeout | null = null;
+import type { UserInfo, Theme } from 'common/types';
+import { BASE_URL, NODE_ID, COMMENT_NODE_CLASSNAME_PREFIX } from 'common/constants.config';
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
@@ -20,84 +17,83 @@ function createFrame({
   host,
   query,
   height,
+  margin = '-6px',
   __colors__ = {},
 }: {
   host: string;
   query: string;
   height?: string;
-  __colors__?: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+  margin?: string;
+  __colors__?: Record<string, string>;
 }) {
   const iframe = document.createElement('iframe');
+
   iframe.src = `${host}/web/iframe.html?${query}`;
   iframe.name = JSON.stringify({ __colors__ });
   iframe.setAttribute('width', '100%');
-  if (height) {
-    iframe.setAttribute('height', height);
-  }
   iframe.setAttribute('frameborder', '0');
   iframe.setAttribute('allowtransparency', 'true');
   iframe.setAttribute('scrolling', 'no');
   iframe.setAttribute('tabindex', '0');
-  iframe.setAttribute('title', 'Remark42');
+  iframe.setAttribute('title', 'Comments | Remark42');
   iframe.setAttribute('horizontalscrolling', 'no');
   iframe.setAttribute('verticalscrolling', 'no');
   iframe.setAttribute(
     'style',
-    'width: 1px !important; min-width: 100% !important; border: none !important; overflow: hidden !important;'
+    `width: 1px !important; min-width: 100% !important; border: none !important; overflow: hidden !important; margin: ${margin};`
   );
+
+  if (height) {
+    iframe.setAttribute('height', height);
+  }
+
   return iframe;
 }
 
 function init() {
-  const node = document.getElementById(window.remark_config.node || NODE_ID);
-
-  if (!node) {
-    console.error("Remark42: Can't find root node.");
-    return;
-  }
-
-  try {
-    window.remark_config = window.remark_config || {};
-  } catch (e) {
-    console.error('Remark42: Config object is undefined.');
-    return;
-  }
-
-  if (!window.remark_config.site_id) {
-    console.error('Remark42: Site ID is undefined.');
-    return;
-  }
-
-  window.remark_config.url = (window.remark_config.url || window.location.origin + window.location.pathname).split(
-    '#'
-  )[0];
-
   window.REMARK42 = window.REMARK42 || {};
-  window.REMARK42.changeTheme = changeTheme;
-  window.REMARK42.destroy = () => {
-    if (initDataAnimationTimeout) {
-      clearTimeout(initDataAnimationTimeout);
-    }
+  window.REMARK42.createInstance = createInstance;
 
-    window.removeEventListener('message', receiveMessages);
-    window.removeEventListener('hashchange', postHashToIframe);
-    document.removeEventListener('click', postClickOutsideToIframe);
-    iframe.remove();
-  };
+  if (window.remark_config) {
+    createInstance(window.remark_config);
+  }
 
-  const query = Object.keys(window.remark_config)
-    .filter(key => key !== '__colors__')
-    .map(key => {
-      return `${encodeURIComponent(key)}=${encodeURIComponent(
-        window.remark_config[key as keyof typeof window.remark_config]
-      )}`;
-    })
+  window.dispatchEvent(new Event('REMARK42::ready'));
+}
+
+function createInstance(config: typeof window.remark_config) {
+  const root = config.node instanceof HTMLElement ? config.node : document.getElementById(config.node || NODE_ID);
+
+  if (!root) {
+    throw new Error("Remark42: Can't find root node.");
+  }
+  if (!window.remark_config) {
+    throw new Error('Remark42: Config object is undefined.');
+  }
+  if (!window.remark_config.site_id) {
+    throw new Error('Remark42: Site ID is undefined.');
+  }
+
+  let initDataAnimationTimeout: number | null = null;
+  let titleObserver: MutationObserver | null = null;
+
+  config.url = (config.url || `${window.location.origin}${window.location.pathname}`).split('#')[0];
+
+  const query = Object.keys(config)
+    .filter((key) => key !== '__colors__')
+    .map(
+      (key) =>
+        `${encodeURIComponent(key)}=${encodeURIComponent(
+          config[key as keyof Omit<typeof window.remark_config, '__colors__'>] as string | number | boolean
+        )}`
+    )
     .join('&');
-  const iframe =
-    (document.querySelector('iframe[title=Remark42]') as HTMLIFrameElement) ||
-    createFrame({ host: BASE_URL, query, __colors__: window.remark_config.__colors__ });
 
-  node.appendChild(iframe);
+  const iframe =
+    (root.firstElementChild as HTMLIFrameElement) ||
+    createFrame({ host: BASE_URL, query, __colors__: config.__colors__ });
+
+  root.appendChild(iframe);
 
   window.addEventListener('message', receiveMessages);
   window.addEventListener('hashchange', postHashToIframe);
@@ -105,7 +101,8 @@ function init() {
 
   const titleElement = document.querySelector('title');
   if (titleElement) {
-    new MutationObserver(mutations => postTitleToIframe(mutations[0].target.textContent!)).observe(titleElement, {
+    titleObserver = new MutationObserver((mutations) => postTitleToIframe(mutations[0].target.textContent!));
+    titleObserver.observe(titleElement, {
       subtree: true,
       characterData: true,
       childList: true,
@@ -140,77 +137,74 @@ function init() {
         this.style.setAttribute('rel', 'stylesheet');
         this.style.setAttribute('type', 'text/css');
         this.style.innerHTML = `
-          #${remarkRootId}-node {
-            position: fixed;
-            top: 0;
-            right: 0;
-            bottom: 0;
-            width: 400px;
-            transition: transform 0.4s ease-out;
-            max-width: 100%;
-            transform: translate(400px, 0);
-          }
-          #${remarkRootId}-node[data-animation] {
-            transform: translate(0, 0);
-          }
-          #${remarkRootId}-back {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.7);
-            opacity: 0;
-            transition: opacity 0.4s ease-out;
-          }
-          #${remarkRootId}-back[data-animation] {
-            opacity: 1;
-          }
+        #${remarkRootId}-node {
+          position: fixed;
+          top: 0;
+          right: 0;
+          bottom: 0;
+          width: 400px;
+          transition: transform 0.4s ease-out;
+          max-width: 100%;
+          transform: translate(400px, 0);
+        }
+        #${remarkRootId}-node[data-animation] {
+          transform: translate(0, 0);
+        }
+        #${remarkRootId}-back {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0,0,0,0.7);
+          opacity: 0;
+          transition: opacity 0.4s ease-out;
+        }
+        #${remarkRootId}-back[data-animation] {
+          opacity: 1;
+        }
+        #${remarkRootId}-close {
+          top: 0px;
+          right: 400px;
+          position: absolute;
+          text-align: center;
+          font-size: 25px;
+          cursor: pointer;
+          color: white;
+          border-color: transparent;
+          border-width: 0;
+          padding: 0;
+          margin-right: 4px;
+          background-color: transparent;
+        }
+        @media all and (max-width: 430px) {
           #${remarkRootId}-close {
-            top: 0px;
-            right: 400px;
-            position: absolute;
-            text-align: center;
-            font-size: 25px;
-            cursor: pointer;
-            color: white;
-            border-color: transparent;
-            border-width: 0;
-            padding: 0;
-            margin-right: 4px;
-            background-color: transparent;
+            right: 0px;
+            font-size: 20px;
+            color: black;
           }
-          @media all and (max-width: 430px) {
-            #${remarkRootId}-close {
-              right: 0px;
-              font-size: 20px;
-              color: black;
-            }
-          }
-        `;
+        }
+      `;
       }
       if (!this.node) {
         this.node = document.createElement('div');
-        this.node.id = remarkRootId + '-node';
+        this.node.id = `${remarkRootId}-node`;
       }
       if (!this.back) {
         this.back = document.createElement('div');
-        this.back.id = remarkRootId + '-back';
+        this.back.id = `${remarkRootId}-back`;
         this.back.onclick = () => this.close();
       }
       if (!this.closeEl) {
         this.closeEl = document.createElement('button');
-        this.closeEl.id = remarkRootId + '-close';
+        this.closeEl.id = `${remarkRootId}-close`;
         this.closeEl.innerHTML = '&#10006;';
         this.closeEl.onclick = () => this.close();
       }
-      const queryUserInfo =
-        query +
-        '&page=user-info&' +
-        `&id=${user.id}&name=${user.name}&picture=${user.picture || ''}&isDefaultPicture=${user.isDefaultPicture || 0}`;
-      const iframe =
-        (document.querySelector('iframe[title=Remark42]') as HTMLIFrameElement) ||
-        createFrame({ host: BASE_URL, query: queryUserInfo, height: '100%' });
+      const queryUserInfo = `${query}&page=user-info&&id=${user.id}&name=${user.name}&picture=${
+        user.picture || ''
+      }&isDefaultPicture=${user.isDefaultPicture || 0}`;
+      const iframe = createFrame({ host: BASE_URL, query: queryUserInfo, height: '100%', margin: '0' });
       this.node.appendChild(iframe);
       this.iframe = iframe;
       this.node.appendChild(this.closeEl);
@@ -218,7 +212,7 @@ function init() {
       document.body.appendChild(this.back);
       document.body.appendChild(this.node);
       document.addEventListener('keydown', this.onKeyDown);
-      initDataAnimationTimeout = setTimeout(() => {
+      initDataAnimationTimeout = window.setTimeout(() => {
         this.back!.setAttribute('data-animation', '');
         this.node!.setAttribute('data-animation', '');
         iframe.focus();
@@ -238,14 +232,14 @@ function init() {
       document.removeEventListener('keydown', this.onKeyDown);
     },
     delay: null,
-    events: ['', 'webkit', 'moz', 'MS', 'o'].map(prefix => (prefix ? `${prefix}TransitionEnd` : 'transitionend')),
+    events: ['', 'webkit', 'moz', 'MS', 'o'].map((prefix) => (prefix ? `${prefix}TransitionEnd` : 'transitionend')),
     onAnimationClose() {
       const el = this.node!;
       if (!this.node) {
         return;
       }
       this.delay = window.setTimeout(this.animationStop, 1000);
-      this.events.forEach(event => el.addEventListener(event, this.animationStop, false));
+      this.events.forEach((event) => el.addEventListener(event, this.animationStop, false));
     },
     onKeyDown(e) {
       // ESCAPE key pressed
@@ -262,7 +256,7 @@ function init() {
         clearTimeout(t.delay);
         t.delay = null;
       }
-      t.events.forEach(event => t.node?.removeEventListener(event, t.animationStop, false));
+      t.events.forEach((event) => t.node!.removeEventListener(event, t.animationStop, false));
       return t.remove();
     },
     remove() {
@@ -310,16 +304,52 @@ function init() {
   }
 
   function postTitleToIframe(title: string) {
-    iframe.contentWindow?.postMessage(JSON.stringify({ title }), '*');
+    if (iframe.contentWindow) {
+      iframe.contentWindow.postMessage(JSON.stringify({ title }), '*');
+    }
   }
 
   function postClickOutsideToIframe(e: MouseEvent) {
-    if (!iframe.contains(e.target as Node)) {
-      iframe.contentWindow?.postMessage(JSON.stringify({ clickOutside: true }), '*');
+    if (iframe.contentWindow && !iframe.contains(e.target as Node)) {
+      iframe.contentWindow.postMessage(JSON.stringify({ clickOutside: true }), '*');
     }
   }
 
   function changeTheme(theme: Theme) {
-    iframe.contentWindow?.postMessage(JSON.stringify({ theme }), '*');
+    if (iframe.contentWindow) {
+      iframe.contentWindow.postMessage(JSON.stringify({ theme }), '*');
+    }
   }
+
+  function destroy() {
+    if (initDataAnimationTimeout) {
+      clearTimeout(initDataAnimationTimeout);
+    }
+
+    window.removeEventListener('message', receiveMessages);
+    window.removeEventListener('hashchange', postHashToIframe);
+    document.removeEventListener('click', postClickOutsideToIframe);
+
+    if (titleObserver) {
+      titleObserver.disconnect();
+      // Allow browser to drop observer and iframe captured in callback
+      // to prevent attempts to send messages to detached frame
+      titleObserver = null;
+    }
+
+    iframe.remove();
+  }
+
+  // TODO: These do not appear in Chrome DevTools
+  window.REMARK42.changeTheme = changeTheme;
+  window.REMARK42.destroy = () => {
+    destroy();
+    delete window.REMARK42.changeTheme;
+    delete window.REMARK42.destroy;
+  };
+
+  return {
+    changeTheme,
+    destroy,
+  };
 }

@@ -1,15 +1,24 @@
-/** @jsx createElement */
-import { createElement, FunctionComponent } from 'preact';
+import { h, FunctionComponent } from 'preact';
+import { useIntl } from 'react-intl';
+import classnames from 'classnames';
 
-import { NODE_ID } from '@app/common/constants';
-import { Comment as CommentType } from '@app/common/types';
-import { Comment } from '@app/components/comment';
+import type { Comment as CommentType } from 'common/types';
+import Comment from 'components/comment';
 
-export const ListComments: FunctionComponent<{ comments: CommentType[] }> = ({ comments = [] }) => (
-  <div id={NODE_ID}>
-    <div className="list-comments">
-      {comments.map(comment => (
+import styles from './list-comments.module.css';
+
+export type ListCommentsProps = {
+  comments: CommentType[];
+};
+
+const ListComments: FunctionComponent<ListCommentsProps> = ({ comments = [] }) => {
+  const intl = useIntl();
+
+  return (
+    <div className={classnames('comments-list', styles.root)}>
+      {comments.map((comment) => (
         <Comment
+          intl={intl}
           key={comment.id}
           CommentForm={null}
           data={comment}
@@ -23,5 +32,7 @@ export const ListComments: FunctionComponent<{ comments: CommentType[] }> = ({ c
         />
       ))}
     </div>
-  </div>
-);
+  );
+};
+
+export default ListComments;

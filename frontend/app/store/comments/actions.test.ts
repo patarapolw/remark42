@@ -1,20 +1,13 @@
-import { mockStore } from '@app/testUtils/mockStore';
-import { LS_SORT_KEY } from '@app/common/constants';
+import stubStore from '__stubs__/store';
+import { LS_SORT_KEY } from 'common/constants';
 
 import { updateSorting } from './actions';
 import { COMMENTS_SET_SORT } from './types';
 
 describe('Store comments actions', () => {
-  beforeAll(() => {
-    require('jest-fetch-mock').enableMocks();
-  });
-  afterAll(() => {
-    require('jest-fetch-mock').resetMocks();
-  });
-
-  it('handles changing a purchase status and fetches all purchases', async () => {
+  it('should save last sort to localstorage', async () => {
     const newSort = '+controversy';
-    const store = mockStore({
+    const store = stubStore({
       comments: {
         sort: '+active',
       },

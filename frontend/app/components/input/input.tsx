@@ -1,25 +1,18 @@
-/** @jsx createElement */
-import { createElement, JSX } from 'preact';
-import { forwardRef } from 'preact/compat';
-import b, { Mods, Mix } from 'bem-react-helper';
-import { Theme } from '@app/common/types';
+import { h, JSX } from 'preact';
+import classnames from 'classnames/bind';
 
-interface Props extends Omit<JSX.HTMLAttributes, 'className'> {
-  kind?: 'primary' | 'secondary';
-  theme?: Theme;
-  mods?: Mods;
-  mix?: Mix;
+import styles from './input.module.css';
+
+const cx = classnames.bind(styles);
+
+export type InputProps = {
+  invalid?: boolean;
   type?: string;
-}
+  className?: string;
+} & JSX.HTMLAttributes<HTMLInputElement>;
 
-export const Input = forwardRef<HTMLInputElement, Props>(
-  ({ children, theme, mods, mix, type = 'text', ...props }, ref) => {
-    const className = b('input', { mix }, { theme, ...mods });
-
-    return (
-      <input className={className} type={type} {...props} ref={ref}>
-        {children}
-      </input>
-    );
-  }
+export const Input = ({ children, className, type = 'text', invalid, ...props }: InputProps) => (
+  <input className={cx(className, 'input', { invalid })} type={type} {...props}>
+    {children}
+  </input>
 );

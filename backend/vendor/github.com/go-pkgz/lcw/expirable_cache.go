@@ -4,8 +4,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pkg/errors"
 
+	"github.com/go-pkgz/lcw/eventbus"
 	"github.com/go-pkgz/lcw/internal/cache"
 )
 
@@ -14,6 +16,7 @@ type ExpirableCache struct {
 	options
 	CacheStat
 	currentSize int64
+	id          string
 	backend     *cache.LoadingCache
 }
 
@@ -24,13 +27,19 @@ func NewExpirableCache(opts ...Option) (*ExpirableCache, error) {
 			maxKeys:      1000,
 			maxValueSize: 0,
 			ttl:          5 * time.Minute,
+			eventBus:     &eventbus.NopPubSub{},
 		},
+		id: uuid.New().String(),
 	}
 
 	for _, opt := range opts {
 		if err := opt(&res.options); err != nil {
 			return nil, errors.Wrap(err, "failed to set cache option")
 		}
+	}
+
+	if err := res.eventBus.Subscribe(res.onBusEvent); err != nil {
+		return nil, errors.Wrapf(err, "can't subscribe to event bus")
 	}
 
 	backend, err := cache.NewLoadingCache(
@@ -45,6 +54,10 @@ func NewExpirableCache(opts ...Option) (*ExpirableCache, error) {
 				size := s.Size()
 				atomic.AddInt64(&res.currentSize, -1*int64(size))
 			}
+			// ignore the error on Publish as we don't have log inside the module and
+			// there is no other way to handle it: we publish the cache invalidation
+			// and hope for the best
+			_ = res.eventBus.Publish(res.id, key)
 		}),
 	)
 	if err != nil {
@@ -56,7 +69,7 @@ func NewExpirableCache(opts ...Option) (*ExpirableCache, error) {
 }
 
 // Get gets value by key or load with fn if not found in cache
-func (c *ExpirableCache) Get(key string, fn func() (Value, error)) (data Value, err error) {
+func (c *ExpirableCache) Get(key string, fn func() (interface{}, error)) (data interface{}, err error) {
 	if v, ok := c.backend.Get(key); ok {
 		atomic.AddInt64(&c.Hits, 1)
 		return v, nil
@@ -91,7 +104,7 @@ func (c *ExpirableCache) Invalidate(fn func(key string) bool) {
 }
 
 // Peek returns the key value (or undefined if not found) without updating the "recently used"-ness of the key.
-func (c *ExpirableCache) Peek(key string) (Value, bool) {
+func (c *ExpirableCache) Peek(key string) (interface{}, bool) {
 	return c.backend.Peek(key)
 }
 
@@ -128,6 +141,13 @@ func (c *ExpirableCache) Close() error {
 	return nil
 }
 
+// onBusEvent reacts on invalidation message triggered by event bus from another cache instance
+func (c *ExpirableCache) onBusEvent(id, key string) {
+	if id != c.id {
+		c.backend.Invalidate(key)
+	}
+}
+
 func (c *ExpirableCache) size() int64 {
 	return atomic.LoadInt64(&c.currentSize)
 }
@@ -136,7 +156,7 @@ func (c *ExpirableCache) keys() int {
 	return c.backend.ItemCount()
 }
 
-func (c *ExpirableCache) allowed(key string, data Value) bool {
+func (c *ExpirableCache) allowed(key string, data interface{}) bool {
 	if c.backend.ItemCount() >= c.maxKeys {
 		return false
 	}

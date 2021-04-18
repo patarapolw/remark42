@@ -14,6 +14,7 @@ func TestComment_Sanitize(t *testing.T) {
 		inp Comment
 		out Comment
 	}{
+
 		{inp: Comment{}, out: Comment{}},
 		{
 			inp: Comment{
@@ -47,6 +48,31 @@ func TestComment_Sanitize(t *testing.T) {
 			inp: Comment{Text: "blah & & 123", User: User{Name: "name <> & ' ` \""}},
 			out: Comment{Text: `blah &amp; &amp; 123`, User: User{Name: "name &lt;&gt; & ' ` \""}},
 		},
+
+		{
+			inp: Comment{Text: "blah blah", Locator: Locator{URL: "javascript:alert('XSS1')"}},
+			out: Comment{Text: "blah blah", Locator: Locator{URL: ""}},
+		},
+		{
+			inp: Comment{Text: "blah blah", Locator: Locator{URL: "javascript:alert(document.domain)//"}},
+			out: Comment{Text: "blah blah", Locator: Locator{URL: ""}},
+		},
+		{
+			inp: Comment{Text: "blah blah", Locator: Locator{URL: "<script>alert()</script>"}},
+			out: Comment{Text: "blah blah", Locator: Locator{URL: "%3Cscript%3Ealert%28%29%3C/script%3E"}},
+		},
+		{
+			inp: Comment{Text: "blah blah",
+				Locator: Locator{URL: "/p/2021/03/23/prep-747/#remark42__comment-1b365913-7056-4920-b9ad-01304bdda085"}},
+			out: Comment{Text: "blah blah",
+				Locator: Locator{URL: "/p/2021/03/23/prep-747/#remark42__comment-1b365913-7056-4920-b9ad-01304bdda085"}},
+		},
+		{
+			inp: Comment{Text: "<scrİpt>&lt;img src=x onerror=alert(1)&gt;",
+				Locator: Locator{URL: "/p/2021/03/23/prep-747/#remark42__comment-1b365913-7056-4920-b9ad-01304bdda085"}},
+			out: Comment{Text: "&lt;img src=x onerror=alert(1)&gt;",
+				Locator: Locator{URL: "/p/2021/03/23/prep-747/#remark42__comment-1b365913-7056-4920-b9ad-01304bdda085"}},
+		},
 	}
 
 	for n, tt := range tbl {
@@ -78,6 +104,7 @@ func TestComment_PrepareUntrusted(t *testing.T) {
 	assert.Equal(t, time.Time{}, comment.Timestamp)
 	assert.Equal(t, false, comment.Deleted)
 	assert.Equal(t, make(map[string]bool), comment.Votes)
+	assert.Equal(t, make(map[string]VotedIPInfo), comment.VotedIPs)
 	assert.Equal(t, User{ID: "username"}, comment.User)
 
 }
@@ -101,6 +128,7 @@ func TestComment_SetDeleted(t *testing.T) {
 	assert.Equal(t, "", comment.Text)
 	assert.Equal(t, "", comment.Orig)
 	assert.Equal(t, map[string]bool{}, comment.Votes)
+	assert.Equal(t, map[string]VotedIPInfo{}, comment.VotedIPs)
 	assert.Equal(t, 0, comment.Score)
 	assert.True(t, comment.Deleted)
 	assert.Nil(t, comment.Edit)
@@ -127,6 +155,7 @@ func TestComment_SetDeletedHard(t *testing.T) {
 	assert.Equal(t, "", comment.Text)
 	assert.Equal(t, "", comment.Orig)
 	assert.Equal(t, map[string]bool{}, comment.Votes)
+	assert.Equal(t, map[string]VotedIPInfo{}, comment.VotedIPs)
 	assert.Equal(t, 0, comment.Score)
 	assert.True(t, comment.Deleted)
 	assert.Nil(t, comment.Edit)
@@ -155,4 +184,41 @@ func TestComment_Snippet(t *testing.T) {
 			assert.Equal(t, tt.out, out)
 		})
 	}
+}
+
+func TestComment_sanitizeAsURL(t *testing.T) {
+
+	tbl := []struct {
+		inp, out string
+	}{
+		{
+			"/p/2021/03/23/prep-747/#remark42__comment-1b365913-7056-4920-b9ad-01304bdda085",
+			"/p/2021/03/23/prep-747/#remark42__comment-1b365913-7056-4920-b9ad-01304bdda085",
+		},
+		{
+			"https://radio-t.com/p/2021/03/23/prep-747/#remark42__comment-1b365913-7056-4920-b9ad-01304bdda085",
+			"https://radio-t.com/p/2021/03/23/prep-747/#remark42__comment-1b365913-7056-4920-b9ad-01304bdda085",
+		},
+		{
+			"javascript:alert(document.domain)//",
+			"",
+		},
+		{
+			"<script>alert()</script>",
+			"%3Cscript%3Ealert%28%29%3C/script%3E",
+		},
+		{
+			"<a href=javascript:alert(document.domain)//>xxx</a>",
+			"",
+		},
+	}
+
+	for i, tt := range tbl {
+		tt := tt
+		c := Comment{}
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			assert.Equal(t, tt.out, c.SanitizeAsURL(tt.inp))
+		})
+	}
+
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	bolt "go.etcd.io/bbolt"
+	"go.uber.org/goleak"
 
 	"github.com/umputun/remark42/backend/app/migrator"
 	"github.com/umputun/remark42/backend/app/notify"
@@ -210,14 +211,17 @@ func TestRest_rejectAnonUser(t *testing.T) {
 
 	resp, err := http.Get(ts.URL)
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, "use not logged in")
 
 	resp, err = http.Get(ts.URL + "?fake_id=anonymous_user123&fake_name=test")
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode, "anon rejected")
 
 	resp, err = http.Get(ts.URL + "?fake_id=real_user123&fake_name=test")
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "real user")
 }
 
@@ -322,24 +326,60 @@ func TestRest_cacheControl(t *testing.T) {
 			assert.Equal(t, http.StatusOK, resp.StatusCode)
 			t.Logf("%+v", resp.Header)
 			assert.Equal(t, `"`+tt.etag+`"`, resp.Header.Get("Etag"))
-			assert.Equal(t, `max-age=`+strconv.Itoa(int(tt.exp.Seconds())), resp.Header.Get("Cache-Control"))
+			assert.Equal(t, `max-age=`+strconv.Itoa(int(tt.exp.Seconds()))+", no-cache", resp.Header.Get("Cache-Control"))
 
 		})
 	}
 
 }
 
-func startupT(t *testing.T) (ts *httptest.Server, srv *Rest, teardown func()) {
-	tmp := os.TempDir()
-	var testDB string
-	// pick a file name which is not in use for sure
+func TestRest_frameAncestors(t *testing.T) {
+
+	tbl := []struct {
+		hosts  []string
+		header string
+	}{
+		{[]string{"http://example.com"}, "frame-ancestors http://example.com;"},
+		{[]string{}, ""},
+		{[]string{"http://example.com", "http://example2.com"}, "frame-ancestors http://example.com http://example2.com;"},
+	}
+
+	for i, tt := range tbl {
+		tt := tt
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			req := httptest.NewRequest("GET", "http://example.com", nil)
+			w := httptest.NewRecorder()
+
+			h := frameAncestors(tt.hosts)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+			h.ServeHTTP(w, req)
+			resp := w.Result()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			t.Logf("%+v", resp.Header)
+			assert.Equal(t, tt.header, resp.Header.Get("Content-Security-Policy"))
+
+		})
+	}
+
+}
+
+// randomPath pick a file or folder name which is not in use for sure
+func randomPath(tempDir, basename, suffix string) (string, error) {
 	for i := 0; i < 10; i++ {
-		testDB = fmt.Sprintf("/%s/test-remark-%d.db", tmp, rand.Int31())
-		_, err := os.Stat(testDB)
+		fname := fmt.Sprintf("/%s/%s-%d%s", tempDir, basename, rand.Int31(), suffix)
+		fmt.Printf("fname %q", fname)
+		_, err := os.Stat(fname)
 		if err != nil {
-			break
+			return fname, nil
 		}
 	}
+	return "", errors.New("cannot create temp file")
+}
+
+func startupT(t *testing.T) (ts *httptest.Server, srv *Rest, teardown func()) {
+	tmp := os.TempDir()
+	testDB, err := randomPath(tmp, "test-remark", ".db")
+	require.NoError(t, err)
+
 	_ = os.RemoveAll(tmp + "/ava-remark42")
 	_ = os.RemoveAll(tmp + "/pics-remark42")
 
@@ -367,10 +407,9 @@ func startupT(t *testing.T) (ts *httptest.Server, srv *Rest, teardown func()) {
 			SecretReader: token.SecretFunc(func(aud string) (string, error) { return "secret", nil }),
 			AvatarStore:  avatar.NewLocalFS(tmp + "/ava-remark42"),
 		}),
-		Cache:      memCache,
-		WebRoot:    tmp,
-		RemarkURL:  "https://demo.remark42.com",
-		AdminEmail: "admin@example.org",
+		Cache:     memCache,
+		WebRoot:   tmp,
+		RemarkURL: "https://demo.remark42.com",
 		ImageService: image.NewService(&image.FileSystem{
 			Location:   tmp + "/pics-remark42",
 			Partitions: 100,
@@ -390,11 +429,6 @@ func startupT(t *testing.T) (ts *httptest.Server, srv *Rest, teardown func()) {
 			URLMapperMaker:    migrator.NewURLMapper,
 			Cache:             memCache,
 			KeyStore:          astore,
-		},
-		Streamer: &Streamer{
-			Refresh:   100 * time.Millisecond,
-			TimeOut:   5 * time.Second,
-			MaxActive: 100,
 		},
 		NotifyService: notify.NopService,
 		EmojiEnabled:  true,
@@ -431,9 +465,9 @@ func fakeAuth(next http.Handler) http.Handler {
 func get(t *testing.T, url string) (response string, statusCode int) {
 	r, err := http.Get(url)
 	require.NoError(t, err)
-	defer r.Body.Close()
 	body, err := ioutil.ReadAll(r.Body)
 	require.NoError(t, err)
+	require.NoError(t, r.Body.Close())
 	return string(body), r.StatusCode
 }
 
@@ -452,9 +486,9 @@ func getWithDevAuth(t *testing.T, url string) (body string, code int) {
 	req.Header.Add("X-JWT", devToken)
 	r, err := client.Do(req)
 	require.NoError(t, err)
-	defer r.Body.Close()
 	b, err := ioutil.ReadAll(r.Body)
 	assert.NoError(t, err)
+	require.NoError(t, r.Body.Close())
 	return string(b), r.StatusCode
 }
 
@@ -465,9 +499,9 @@ func getWithAdminAuth(t *testing.T, url string) (response string, statusCode int
 	req.SetBasicAuth("admin", "password")
 	r, err := client.Do(req)
 	require.NoError(t, err)
-	defer r.Body.Close()
 	body, err := ioutil.ReadAll(r.Body)
 	assert.NoError(t, err)
+	require.NoError(t, r.Body.Close())
 	return string(body), r.StatusCode
 }
 func post(t *testing.T, url, body string) (*http.Response, error) {
@@ -490,6 +524,7 @@ func addComment(t *testing.T, c store.Comment, ts *httptest.Server) string {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	b, err = ioutil.ReadAll(resp.Body)
+	require.NoError(t, resp.Body.Close())
 	require.NoError(t, err)
 
 	crResp := R.JSON{}
@@ -502,10 +537,12 @@ func addComment(t *testing.T, c store.Comment, ts *httptest.Server) string {
 func requireAdminOnly(t *testing.T, req *http.Request) {
 	resp, err := sendReq(t, req, "") // no-auth user
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, 401, resp.StatusCode)
 
 	resp, err = sendReq(t, req, devToken) // non-admin user
 	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
 	assert.Equal(t, 403, resp.StatusCode)
 }
 
@@ -530,4 +567,8 @@ func waitForHTTPSServerStart(port int) {
 			break
 		}
 	}
+}
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
 }

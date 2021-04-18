@@ -100,13 +100,17 @@ export interface Tree {
   info: PostInfo;
 }
 
+export type OAuthProvider = 'facebook' | 'twitter' | 'google' | 'yandex' | 'github' | 'microsoft' | 'dev';
+export type FormProvider = 'email' | 'anonymous';
+export type Provider = OAuthProvider | FormProvider;
+
 export interface Config {
   version: string;
+  auth_providers: Provider[];
   edit_duration: number;
   max_comment_size: number;
   admins: string[];
   admin_email: string;
-  auth_providers: AuthProvider['name'][];
   low_score: number;
   critical_score: number;
   positive_score: boolean;
@@ -118,24 +122,7 @@ export interface Config {
   emoji_enabled: boolean;
 }
 
-export interface RemarkConfig {
-  site_id: string;
-  url: string;
-  /** used in last comments widget */
-  max_last_comments?: number;
-}
-
 export type Sorting = '-time' | '+time' | '-active' | '+active' | '-score' | '+score' | '-controversy' | '+controversy';
-
-export type AuthProvider =
-  | { name: 'google' }
-  | { name: 'facebook' }
-  | { name: 'github' }
-  | { name: 'yandex' }
-  | { name: 'twitter' }
-  | { name: 'dev' }
-  | { name: 'anonymous'; username: string }
-  | { name: 'email'; token: string };
 
 export type BlockTTL = 'permanently' | '43200m' | '10080m' | '1440m';
 

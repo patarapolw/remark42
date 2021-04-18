@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -71,6 +72,12 @@ func TestTelegram_Send(t *testing.T) {
 	err = tb.Send(context.TODO(), Request{Comment: c, parent: cp})
 	assert.NoError(t, err)
 
+	err = tb.Send(context.TODO(), Request{Comment: c, parent: cp})
+	assert.NoError(t, err)
+	c.PostTitle = "[test title]"
+	err = tb.Send(context.TODO(), Request{Comment: c, parent: cp})
+	assert.NoError(t, err)
+
 	tb, err = NewTelegram("non-json-resp", "remark_test", 2*time.Second, ts.URL+"/")
 	assert.Error(t, err, "should failed")
 	err = tb.Send(context.TODO(), Request{Comment: c, parent: cp})
@@ -78,7 +85,18 @@ func TestTelegram_Send(t *testing.T) {
 	assert.Contains(t, err.Error(), "unexpected telegram status code 404", "send on broken tg")
 
 	assert.Equal(t, "telegram: @remark_test", tb.String())
-	require.NoError(t, tb.Send(context.TODO(), Request{}), "Empty Comment doesn't send anything")
+}
+
+func TestTelegram_SendVerification(t *testing.T) {
+	ts := mockTelegramServer()
+	defer ts.Close()
+
+	tb, err := NewTelegram("good-token", "remark_test", 2*time.Second, ts.URL+"/")
+	assert.NoError(t, err)
+	assert.NotNil(t, tb)
+
+	err = tb.SendVerification(context.TODO(), VerificationRequest{})
+	assert.NoError(t, err)
 }
 
 func mockTelegramServer() *httptest.Server {
@@ -122,4 +140,27 @@ func mockTelegramServer() *httptest.Server {
 	})
 
 	return httptest.NewServer(router)
+}
+
+func TestTelegram_escapeTitle(t *testing.T) {
+
+	tbl := []struct {
+		inp string
+		out string
+	}{
+		{"", ""},
+		{"something 123", "something 123"},
+		{"something [123]", "something \\[123\\]"},
+		{"something (123)", "something \\(123\\)"},
+		{"something (123) [aaa]", "something \\(123\\) \\[aaa\\]"},
+	}
+
+	tb := Telegram{}
+	for i, tt := range tbl {
+		tt := tt
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			assert.Equal(t, tt.out, tb.escapeTitle(tt.inp))
+		})
+	}
+
 }

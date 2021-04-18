@@ -1,22 +1,19 @@
-/** @jsx createElement */
-import { createElement, Component, Fragment } from 'preact';
+import { h, Component, Fragment } from 'preact';
 import { useSelector } from 'react-redux';
 import { FormattedMessage, defineMessages, IntlShape, useIntl } from 'react-intl';
 import b from 'bem-react-helper';
 
-import { User, AuthProvider, Sorting, Theme, PostInfo } from '@app/common/types';
-import { IS_STORAGE_AVAILABLE, IS_THIRD_PARTY } from '@app/common/constants';
-import { requestDeletion } from '@app/utils/email';
-import postMessage from '@app/utils/postMessage';
-import { getHandleClickProps } from '@app/common/accessibility';
-import { StoreState } from '@app/store';
-import { ProviderState } from '@app/store/provider/reducers';
-import { Dropdown, DropdownItem } from '@app/components/dropdown';
-import { Button } from '@app/components/button';
-import Auth from '@app/components/auth';
+import { User, Sorting, Theme, PostInfo } from 'common/types';
+import { IS_STORAGE_AVAILABLE, IS_THIRD_PARTY } from 'common/constants';
+import { requestDeletion } from 'utils/email';
+import postMessage from 'utils/postMessage';
+import { getHandleClickProps } from 'common/accessibility';
+import { StoreState } from 'store';
+import { Dropdown, DropdownItem } from 'components/dropdown';
+import { Button } from 'components/button';
+import Auth from 'components/auth';
 
-import useTheme from '@app/hooks/useTheme';
-import { StaticStore } from '@app/common/static_store';
+import useTheme from 'hooks/useTheme';
 
 export interface OwnProps {
   user: User | null;
@@ -25,7 +22,6 @@ export interface OwnProps {
   postInfo: PostInfo;
 
   onSortChange(s: Sorting): Promise<void>;
-  onSignIn(p: AuthProvider): Promise<User | null>;
   onSignOut(): Promise<void>;
   onCommentsChangeReadOnlyMode(readOnly: boolean): Promise<void>;
   onBlockedUsersShow(): void;
@@ -35,8 +31,6 @@ export interface OwnProps {
 export interface Props extends OwnProps {
   intl: IntlShape;
   theme: Theme;
-  providers: AuthProvider['name'][];
-  provider: ProviderState;
   sort: Sorting;
 }
 
@@ -92,7 +86,7 @@ export class AuthPanel extends Component<Props, State> {
     const isUserAnonymous = user && user.id.substr(0, 10) === 'anonymous_';
 
     return (
-      <Fragment>
+      <>
         <FormattedMessage id="authPanel.logged-as" defaultMessage="You logged in as" />{' '}
         <Dropdown title={user.name} titleClass="auth-panel__user-dropdown-title" theme={theme}>
           <DropdownItem separator={!isUserAnonymous}>
@@ -116,7 +110,7 @@ export class AuthPanel extends Component<Props, State> {
         <Button kind="link" theme={theme} onClick={onSignOut}>
           <FormattedMessage id="authPanel.logout" defaultMessage="Logout?" />
         </Button>
-      </Fragment>
+      </>
     );
   };
 
@@ -132,6 +126,7 @@ export class AuthPanel extends Component<Props, State> {
           className="auth-panel__pseudo-link"
           href={`${window.location.origin}/web/comments.html${window.location.search}`}
           target="_blank"
+          rel="noreferrer"
         >
           <FormattedMessage id="authPanel.new-page" defaultMessage="new page" />
         </a>
@@ -193,7 +188,7 @@ export class AuthPanel extends Component<Props, State> {
         <FormattedMessage id="commentSort.sort-by" defaultMessage="Sort by" />{' '}
         <span className="auth-panel__select-label">
           <span className={b('auth-panel__select-label-value', {}, { focused: sortSelectFocused })}>
-            {sortArray.find(x => 'selected' in x && x.selected!)!.label}
+            {sortArray.find((x) => 'selected' in x && x.selected!)!.label}
           </span>
           <select
             className="auth-panel__select"
@@ -201,7 +196,7 @@ export class AuthPanel extends Component<Props, State> {
             onFocus={this.onSortFocus}
             onBlur={this.onSortBlur}
           >
-            {sortArray.map(sort => (
+            {sortArray.map((sort) => (
               <option value={sort.value} selected={sort.selected}>
                 {sort.label}
               </option>
@@ -315,7 +310,7 @@ function getSortArray(currentSort: Sorting, intl: IntlShape) {
     },
   ];
 
-  return sortArray.map(sort => {
+  return sortArray.map((sort) => {
     if (sort.value === currentSort) {
       sort.selected = true;
     }
@@ -327,17 +322,7 @@ function getSortArray(currentSort: Sorting, intl: IntlShape) {
 export default function AuthPanelConnected(props: OwnProps) {
   const intl = useIntl();
   const theme = useTheme();
-  const provider = useSelector<StoreState, ProviderState>(state => state.provider);
-  const sort = useSelector<StoreState, Sorting>(state => state.comments.sort);
+  const sort = useSelector<StoreState, Sorting>((state) => state.comments.sort);
 
-  return (
-    <AuthPanel
-      intl={intl}
-      theme={theme}
-      providers={StaticStore.config.auth_providers}
-      provider={provider}
-      sort={sort}
-      {...props}
-    />
-  );
+  return <AuthPanel intl={intl} theme={theme} sort={sort} {...props} />;
 }

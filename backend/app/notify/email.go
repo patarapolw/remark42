@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"mime"
 	"mime/quotedprintable"
 	"net"
 	"net/smtp"
@@ -14,6 +15,7 @@ import (
 
 	log "github.com/go-pkgz/lgr"
 	"github.com/go-pkgz/repeater"
+	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
 
 	"github.com/umputun/remark42/backend/app/templates"
@@ -21,12 +23,13 @@ import (
 
 // EmailParams contain settings for email notifications
 type EmailParams struct {
-	From                     string // from email address
-	MsgTemplatePath          string // path to request message template
-	VerificationSubject      string // verification message sub
-	VerificationTemplatePath string // path to verification template
-	SubscribeURL             string // full subscribe handler URL
-	UnsubscribeURL           string // full unsubscribe handler URL
+	From                     string   // from email address
+	AdminEmails              []string // administrator emails to send copy of comment notification to
+	MsgTemplatePath          string   // path to request message template
+	VerificationSubject      string   // verification message sub
+	VerificationTemplatePath string   // path to verification template
+	SubscribeURL             string   // full subscribe handler URL
+	UnsubscribeURL           string   // full unsubscribe handler URL
 
 	TokenGenFn func(userID, email, site string) (string, error) // Unsubscribe token generation function
 }
@@ -164,39 +167,62 @@ func (e *Email) setTemplates() error {
 	return nil
 }
 
-// Send email about comment reply to Request.Email if it's set,
-// also sends email to site administrator if appropriate option is set.
+// Send email about comment reply to Request.Emails and Email.AdminEmails
+// if they're set.
 // Thread safe
-func (e *Email) Send(ctx context.Context, req Request) (err error) {
+func (e *Email) Send(ctx context.Context, req Request) error {
+	select {
+	case <-ctx.Done():
+		return errors.Errorf("sending email messages about comment %q aborted due to canceled context", req.Comment.ID)
+	default:
+	}
+
+	result := new(multierror.Error)
+
+	for _, email := range req.Emails {
+		err := e.buildAndSendMessage(ctx, req, email, false)
+		result = multierror.Append(errors.Wrapf(err, "problem sending user email notification to %q", email))
+	}
+
+	for _, email := range e.AdminEmails {
+		err := e.buildAndSendMessage(ctx, req, email, true)
+		result = multierror.Append(errors.Wrapf(err, "problem sending admin email notification to %q", email))
+	}
+
+	return result.ErrorOrNil()
+}
+
+func (e *Email) buildAndSendMessage(ctx context.Context, req Request, email string, forAdmin bool) error {
+	log.Printf("[DEBUG] send notification via %s, comment id %s", e, req.Comment.ID)
+	msg, err := e.buildMessageFromRequest(req, email, forAdmin)
+	if err != nil {
+		return err
+	}
+
+	return repeater.NewDefault(5, time.Millisecond*250).Do(
+		ctx,
+		func() error {
+			return e.sendMessage(emailMessage{from: e.From, to: email, message: msg})
+		})
+}
+
+// SendVerification email verification VerificationRequest.Email if it's set.
+// Thread safe
+func (e *Email) SendVerification(ctx context.Context, req VerificationRequest) error {
 	if req.Email == "" {
 		// this means we can't send this request via Email
 		return nil
 	}
 	select {
 	case <-ctx.Done():
-		return errors.Errorf("sending message to %q aborted due to canceled context", req.Email)
+		return errors.Errorf("sending message to %q aborted due to canceled context", req.User)
 	default:
 	}
-	var msg string
 
-	if req.Verification.Token != "" {
-		log.Printf("[DEBUG] send verification via %s, user %s", e, req.Verification.User)
-		msg, err = e.buildVerificationMessage(req.Verification.User, req.Email, req.Verification.Token, req.Verification.SiteID)
-		if err != nil {
-			return err
-		}
-	}
-
-	if req.Comment.ID != "" {
-		if req.parent.User.ID == req.Comment.User.ID && !req.ForAdmin {
-			// don't send anything if if user replied to their own comment
-			return nil
-		}
-		log.Printf("[DEBUG] send notification via %s, comment id %s", e, req.Comment.ID)
-		msg, err = e.buildMessageFromRequest(req, req.ForAdmin)
-		if err != nil {
-			return err
-		}
+	log.Printf("[DEBUG] send verification via %s, user %s", e, req.User)
+	msg, err := e.buildVerificationMessage(req.User, req.Email, req.Token, req.SiteID)
+	if err != nil {
+		return err
 	}
 
 	return repeater.NewDefault(5, time.Millisecond*250).Do(
@@ -224,16 +250,16 @@ func (e *Email) buildVerificationMessage(user, email, token, site string) (strin
 }
 
 // buildMessageFromRequest generates email message based on Request using e.MsgTemplate
-func (e *Email) buildMessageFromRequest(req Request, forAdmin bool) (string, error) {
+func (e *Email) buildMessageFromRequest(req Request, email string, forAdmin bool) (string, error) {
 	subject := "New reply to your comment"
 	if forAdmin {
 		subject = "New comment to your site"
 	}
 	if req.Comment.PostTitle != "" {
-		subject += fmt.Sprintf(" for \"%s\"", req.Comment.PostTitle)
+		subject += fmt.Sprintf(" for %q", req.Comment.PostTitle)
 	}
 
-	token, err := e.TokenGenFn(req.parent.User.ID, req.Email, req.Comment.Locator.SiteID)
+	token, err := e.TokenGenFn(req.parent.User.ID, email, req.Comment.Locator.SiteID)
 	if err != nil {
 		return "", errors.Wrapf(err, "error creating token for unsubscribe link")
 	}
@@ -251,7 +277,7 @@ func (e *Email) buildMessageFromRequest(req Request, forAdmin bool) (string, err
 		CommentLink:     commentURLPrefix + req.Comment.ID,
 		CommentDate:     req.Comment.Timestamp,
 		PostTitle:       req.Comment.PostTitle,
-		Email:           req.Email,
+		Email:           email,
 		UnsubscribeLink: unsubscribeLink,
 		ForAdmin:        forAdmin,
 	}
@@ -267,7 +293,7 @@ func (e *Email) buildMessageFromRequest(req Request, forAdmin bool) (string, err
 	if err != nil {
 		return "", errors.Wrapf(err, "error executing template to build comment reply message")
 	}
-	return e.buildMessage(subject, msg.String(), req.Email, "text/html", unsubscribeLink)
+	return e.buildMessage(subject, msg.String(), email, "text/html", unsubscribeLink)
 }
 
 // buildMessage generates email message to send using net/smtp.Data()
@@ -278,7 +304,7 @@ func (e *Email) buildMessage(subject, body, to, contentType, unsubscribeLink str
 	}
 	message = addHeader(message, "From", e.From)
 	message = addHeader(message, "To", to)
-	message = addHeader(message, "Subject", subject)
+	message = addHeader(message, "Subject", mime.BEncoding.Encode("utf-8", subject))
 	message = addHeader(message, "Content-Transfer-Encoding", "quoted-printable")
 
 	if contentType != "" {
@@ -379,6 +405,7 @@ func (s *emailClient) Create(params SMTPParams) (smtpClient, error) {
 		tlsConf := &tls.Config{
 			InsecureSkipVerify: false,
 			ServerName:         params.Host,
+			MinVersion:         tls.VersionTLS12,
 		}
 		conn, err := tls.Dial("tcp", srvAddress, tlsConf)
 		if err != nil {

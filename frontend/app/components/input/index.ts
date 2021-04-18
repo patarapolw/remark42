@@ -1,3 +1,2 @@
 export { Input } from './input';
-
-import './input.scss';
+export type { InputProps } from './input';

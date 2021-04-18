@@ -1,4 +1,5 @@
-const path = require('path');
+const { CUSTOM_PROPERTIES_PATH } = require('./webpack.config');
+
 module.exports = {
   extends: ['stylelint-config-standard', 'stylelint-config-prettier'],
   plugins: ['stylelint-value-no-unknown-custom-properties', '@mavrin/stylelint-declaration-use-css-custom-properties'],
@@ -11,6 +12,8 @@ module.exports = {
         ignore: ['after-comment'],
       },
     ],
+    'selector-pseudo-class-no-unknown': [true, { ignorePseudoClasses: ['global'] }],
+    'property-no-unknown': [true, { ignoreProperties: ['composes'] }],
     'mavrin/stylelint-declaration-use-css-custom-properties': {
       cssDefinitions: ['color'],
       ignoreProperties: ['/^\\$/'],
@@ -19,7 +22,7 @@ module.exports = {
     'csstools/value-no-unknown-custom-properties': [
       true,
       {
-        importFrom: path.resolve(__dirname, './app/custom-properties.css'),
+        importFrom: CUSTOM_PROPERTIES_PATH,
       },
     ],
   },

@@ -1,0 +1,105 @@
+name: frontend
+
+on:
+  push:
+    branches:
+    tags:
+    paths:
+      - '.github/workflows/ci-frontend.yml'
+      - 'frontend/**'
+  pull_request:
+    paths:
+      - '.github/workflows/ci-frontend.yml'
+      - 'frontend/**'
+
+jobs:
+  check-transtations:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [14.15]
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v1
+        with:
+          node-version: ${{ matrix.node }}
+
+      - run: npm ci --loglevel warn
+        working-directory: ./frontend
+
+      - uses: actions/cache@v2
+        with:
+          path: ${{ github.workspace }}/frontend/node_modules/.cache
+          key: ${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - run: npm run check:translation
+        working-directory: ./frontend
+
+  check-typescript:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [14.15]
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v1
+        with:
+          node-version: ${{ matrix.node }}
+
+      - run: npm ci --loglevel warn
+        working-directory: ./frontend
+
+      - uses: actions/cache@v2
+        with:
+          path: ${{ github.workspace }}/frontend/node_modules/.cache
+          key: ${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - run: npm run check:types
+        working-directory: ./frontend
+
+  lint:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [14.15]
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v1
+        with:
+          node-version: ${{ matrix.node }}
+
+      - run: npm ci --loglevel warn
+        working-directory: ./frontend
+
+      - run: npx run-p lint
+        working-directory: ./frontend
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [14.15]
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v1
+        with:
+          node-version: ${{ matrix.node }}
+
+      - run: npm ci --loglevel warn
+        working-directory: ./frontend
+
+      - run: npm run test:coverage
+        working-directory: ./frontend
+
+      - name: submit coverage
+        run: node ${{ github.workspace }}/frontend/node_modules/.bin/codecov
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
