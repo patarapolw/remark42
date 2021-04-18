@@ -1,43 +1,48 @@
-/** @jsx createElement */
-import { createElement, Component, FunctionComponent, Fragment } from 'preact';
+import { h, Component, FunctionComponent, Fragment } from 'preact';
 import { useSelector } from 'react-redux';
 import b from 'bem-react-helper';
 import { IntlShape, useIntl, FormattedMessage, defineMessages } from 'react-intl';
+import classnames from 'classnames';
 
-import { AuthProvider, Sorting } from '@app/common/types';
-import { COMMENT_NODE_CLASSNAME_PREFIX, MAX_SHOWN_ROOT_COMMENTS, THEMES, IS_MOBILE } from '@app/common/constants';
-import { maxShownComments, url } from '@app/common/settings';
-
-import { StaticStore } from '@app/common/static_store';
-import { StoreState } from '@app/store';
+import type { Sorting } from 'common/types';
+import type { StoreState } from 'store';
 import {
+  COMMENT_NODE_CLASSNAME_PREFIX,
+  MAX_SHOWN_ROOT_COMMENTS,
+  THEMES,
+  IS_MOBILE,
+  LS_EMAIL_KEY,
+} from 'common/constants';
+import { maxShownComments, url } from 'common/settings';
+
+import { StaticStore } from 'common/static-store';
+import {
+  setUser,
   fetchUser,
-  logout,
-  logIn,
   blockUser,
   unblockUser,
   fetchBlockedUsers,
   hideUser,
   unhideUser,
-} from '@app/store/user/actions';
-import { fetchComments, updateSorting } from '@app/store/comments/actions';
-import { setCommentsReadOnlyState } from '@app/store/post_info/actions';
-import { setTheme } from '@app/store/theme/actions';
-import { addComment, updateComment } from '@app/store/comments/actions';
+} from 'store/user/actions';
+import { fetchComments, updateSorting, addComment, updateComment, unsetCommentMode } from 'store/comments/actions';
+import { setCommentsReadOnlyState } from 'store/post-info/actions';
+import { setTheme } from 'store/theme/actions';
 
-import AuthPanel from '@app/components/auth-panel';
-import Settings from '@app/components/settings';
-import { ConnectedComment as Comment } from '@app/components/comment/connected-comment';
-import { CommentForm } from '@app/components/comment-form';
-import { Preloader } from '@app/components/preloader';
-import { Thread } from '@app/components/thread';
-import { Button } from '@app/components/button';
-import { uploadImage, getPreview } from '@app/common/api';
-import { isUserAnonymous } from '@app/utils/isUserAnonymous';
-import { bindActions } from '@app/utils/actionBinder';
-import postMessage from '@app/utils/postMessage';
-import { useActions } from '@app/hooks/useAction';
-import { setCollapse } from '@app/store/thread/actions';
+import { Button } from 'components/button';
+import Preloader from 'components/preloader';
+import Settings from 'components/settings';
+import AuthPanel from 'components/auth-panel';
+import { CommentForm } from 'components/comment-form';
+import { Thread } from 'components/thread';
+import { ConnectedComment as Comment } from 'components/comment/connected-comment';
+import { uploadImage, getPreview } from 'common/api';
+import { isUserAnonymous } from 'utils/isUserAnonymous';
+import { bindActions } from 'utils/actionBinder';
+import postMessage from 'utils/postMessage';
+import { useActions } from 'hooks/useAction';
+import { setCollapse } from 'store/thread/actions';
+import { logout } from 'components/auth/auth.api';
 
 const mapStateToProps = (state: StoreState) => ({
   sort: state.comments.sort,
@@ -45,14 +50,14 @@ const mapStateToProps = (state: StoreState) => ({
   user: state.user,
   childToParentComments: Object.entries(state.comments.childComments).reduce(
     (accumulator: Record<string, string>, [key, children]) => {
-      children.forEach(child => (accumulator[child] = key));
+      children.forEach((child) => (accumulator[child] = key));
       return accumulator;
     },
     {}
   ),
   collapsedThreads: state.collapsedThreads,
   topComments: state.comments.topComments,
-  pinnedComments: state.comments.pinnedComments.map(id => state.comments.allComments[id]).filter(c => !c.hidden),
+  pinnedComments: state.comments.pinnedComments.map((id) => state.comments.allComments[id]).filter((c) => !c.hidden),
   theme: state.theme,
   info: state.info,
   hiddenUsers: state.hiddenUsers,
@@ -64,10 +69,9 @@ const mapStateToProps = (state: StoreState) => ({
 const boundActions = bindActions({
   updateSorting,
   fetchComments,
+  setUser,
   fetchUser,
   fetchBlockedUsers,
-  logIn,
-  logOut: logout,
   setTheme,
   setCommentsReadOnlyState,
   blockUser,
@@ -77,6 +81,7 @@ const boundActions = bindActions({
   addComment,
   updateComment,
   setCollapse,
+  unsetCommentMode,
 });
 
 type Props = ReturnType<typeof mapStateToProps> & typeof boundActions & { intl: IntlShape };
@@ -140,28 +145,23 @@ export class Root extends Component<Props, State> {
     await this.props.updateSorting(sort);
   };
 
-  logIn = async (provider: AuthProvider) => {
-    const user = await this.props.logIn(provider);
-
-    await this.props.fetchComments();
-
-    return user;
-  };
-
-  logOut = async () => {
-    await this.props.logOut();
+  logout = async () => {
+    await logout();
+    this.props.setUser();
+    this.props.unsetCommentMode();
+    localStorage.removeItem(LS_EMAIL_KEY);
     await this.props.fetchComments();
   };
 
-  checkUrlHash = (e: Event & { newURL?: string }) => {
-    const hash = e ? `#${e.newURL!.split('#')[1]}` : window.location.hash;
+  checkUrlHash = (e: Event & { newURL: string }) => {
+    const hash = e ? `#${e.newURL.split('#')[1]}` : window.location.hash;
 
     if (hash.indexOf(`#${COMMENT_NODE_CLASSNAME_PREFIX}`) === 0) {
       if (e) e.preventDefault();
 
       if (!document.querySelector(hash)) {
         const ids = getCollapsedParents(hash, this.props.childToParentComments, this.props.collapsedThreads);
-        ids.forEach(id => this.props.setCollapse(id, false));
+        ids.forEach((id) => this.props.setCollapse(id, false));
       }
 
       setTimeout(() => {
@@ -178,14 +178,16 @@ export class Root extends Component<Props, State> {
   };
 
   onMessage(event: { data: string | object }) {
+    if (!event.data) {
+      return;
+    }
+
     try {
       const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
       if (data.theme && THEMES.includes(data.theme)) {
         this.props.setTheme(data.theme);
       }
-    } catch (e) {
-      console.error(e); // eslint-disable-line no-console
-    }
+    } catch (e) {}
   }
 
   onBlockedUsersShow = async () => {
@@ -216,18 +218,13 @@ export class Root extends Component<Props, State> {
     });
   };
 
-  /**
-   * Defines whether current client is logged in via `Anonymous provider`
-   */
-  isAnonymous = () => isUserAnonymous(this.props.user);
-
   render(props: Props, { isUserLoading, commentsShown, isSettingsVisible }: State) {
     if (isUserLoading) {
       return <Preloader mix="root__preloader" />;
     }
 
     const isCommentsDisabled = props.info.read_only!;
-    const imageUploadHandler = this.isAnonymous() ? undefined : this.props.uploadImage;
+    const imageUploadHandler = isUserAnonymous(this.props.user) ? undefined : this.props.uploadImage;
 
     return (
       <Fragment>
@@ -237,8 +234,7 @@ export class Root extends Component<Props, State> {
           onSortChange={this.changeSort}
           isCommentsDisabled={isCommentsDisabled}
           postInfo={this.props.info}
-          onSignIn={this.logIn}
-          onSignOut={this.logOut}
+          onSignOut={this.logout}
           onBlockedUsersShow={this.onBlockedUsersShow}
           onBlockedUsersHide={this.onBlockedUsersHide}
           onCommentsChangeReadOnlyMode={this.props.setCommentsReadOnlyState}
@@ -257,7 +253,7 @@ export class Root extends Component<Props, State> {
               onUnblockSomeone={this.onUnblockSomeone}
             />
           ) : (
-            <Fragment>
+            <>
               {!isCommentsDisabled && (
                 <CommentForm
                   id={encodeURI(url || '')}
@@ -266,7 +262,7 @@ export class Root extends Component<Props, State> {
                   mix="root__input"
                   mode="main"
                   user={props.user}
-                  onSubmit={(text, title) => this.props.addComment(text, title)}
+                  onSubmit={(text: string, title: string) => this.props.addComment(text, title)}
                   getPreview={this.props.getPreview}
                   uploadImage={imageUploadHandler}
                   simpleView={StaticStore.config.simple_view}
@@ -279,7 +275,7 @@ export class Root extends Component<Props, State> {
                   role="region"
                   aria-label={this.props.intl.formatMessage(messages.pinnedComments)}
                 >
-                  {this.props.pinnedComments.map(comment => (
+                  {this.props.pinnedComments.map((comment) => (
                     <Comment
                       CommentForm={CommentForm}
                       intl={this.props.intl}
@@ -299,7 +295,7 @@ export class Root extends Component<Props, State> {
                   {(IS_MOBILE && commentsShown < this.props.topComments.length
                     ? this.props.topComments.slice(0, commentsShown)
                     : this.props.topComments
-                  ).map(id => (
+                  ).map((id) => (
                     <Thread
                       key={`thread-${id}`}
                       id={id}
@@ -322,13 +318,19 @@ export class Root extends Component<Props, State> {
                   <Preloader mix="root__preloader" />
                 </div>
               )}
-            </Fragment>
+            </>
           )}
         </div>
       </Fragment>
     );
   }
 }
+
+const CopyrightLink = (title: string) => (
+  <a class="root__copyright-link" href="https://remark42.com/">
+    {title}
+  </a>
+);
 
 /** Root component connected to redux */
 export const ConnectedRoot: FunctionComponent = () => {
@@ -337,19 +339,13 @@ export const ConnectedRoot: FunctionComponent = () => {
   const intl = useIntl();
 
   return (
-    <div className={b('root', {}, { theme: props.theme })}>
+    <div className={classnames(b('root', {}, { theme: props.theme }), props.theme)}>
       <Root {...props} {...actions} intl={intl} />
       <p className="root__copyright" role="contentinfo">
         <FormattedMessage
           id="root.powered-by"
           defaultMessage="Powered by <a>Remark42</a>"
-          values={{
-            a: (title: string) => (
-              <a class="root__copyright-link" href="https://remark42.com/">
-                {title}
-              </a>
-            ),
-          }}
+          values={{ a: CopyrightLink }}
         />
       </p>
     </div>

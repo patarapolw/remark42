@@ -1,11 +1,13 @@
-import * as api from '@app/common/api';
-import { User } from '@app/common/types';
+import { getUser } from 'common/api';
+import { User } from 'common/types';
 
-import { fetchUser, logIn, logout } from './actions';
+import { fetchUser, signin } from './actions';
 import { user } from './reducers';
-import { USER_SET } from './types';
+import { USER_ACTIONS, USER_SET } from './types';
 
-jest.mock('@app/common/api');
+jest.mock('common/api');
+
+const getUserMock = (getUser as unknown) as jest.Mock<ReturnType<typeof getUser>>;
 
 afterEach(() => {
   jest.resetModules();
@@ -14,12 +16,13 @@ afterEach(() => {
 describe('user', () => {
   it('should return null by default', () => {
     const action = { type: 'OTHER' };
-    const newState = user(null, action as any);
+    const newState = user(null, action as USER_ACTIONS);
+
     expect(newState).toEqual(null);
   });
 
   it('should set state of user on fetchUser', async () => {
-    (api.getUser as any).mockImplementation(
+    getUserMock.mockImplementation(
       async (): Promise<User> =>
         ({
           id: 'john',
@@ -40,48 +43,29 @@ describe('user', () => {
     });
   });
 
-  it('should set state of user on logIn', async () => {
-    (api.logIn as any).mockImplementation(
-      async (): Promise<User> =>
-        ({
-          id: 'john',
-          name: 'John',
-          admin: true,
-        } as User)
-    );
+  it('should set state of user on signin', () => {
     const dispatch = jest.fn();
     const getState = jest.fn();
-    await logIn({ name: 'google' })(dispatch, getState, undefined);
+    signin({
+      name: 'Umputun',
+      id: '1',
+      picture: '',
+      admin: true,
+      ip: '',
+      block: false,
+      verified: true,
+    })(dispatch, getState, undefined);
     expect(dispatch).toBeCalledWith({
       type: USER_SET,
       user: {
-        id: 'john',
-        name: 'John',
+        name: 'Umputun',
+        id: '1',
+        picture: '',
         admin: true,
+        ip: '',
+        block: false,
+        verified: true,
       },
-    });
-  });
-
-  it('should NOT set state of user on failed logIn', async () => {
-    (api.logIn as any).mockImplementation(
-      async (): Promise<User> => {
-        throw new Error('Unauthorized');
-      }
-    );
-    const dispatch = jest.fn();
-    const getState = jest.fn();
-    await logIn({ name: 'google' })(dispatch, getState, undefined).catch(() => undefined);
-    expect(dispatch).not.toBeCalled();
-  });
-
-  it('should unset user on logOut', async () => {
-    (api.logOut as any).mockImplementation(async (): Promise<void> => undefined);
-    const dispatch = jest.fn();
-    const getState = jest.fn();
-    await logout()(dispatch, getState, undefined);
-    expect(dispatch).toBeCalledWith({
-      type: USER_SET,
-      user: null,
     });
   });
 });

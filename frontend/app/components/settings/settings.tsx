@@ -1,10 +1,9 @@
-/** @jsx createElement */
-import { createElement, Component } from 'preact';
+import { h, Component } from 'preact';
 import b from 'bem-react-helper';
 
-import { User, BlockedUser, Theme, BlockTTL } from '@app/common/types';
-import { getHandleClickProps } from '@app/common/accessibility';
-import { StoreState } from '@app/store';
+import { User, BlockedUser, Theme, BlockTTL } from 'common/types';
+import { getHandleClickProps } from 'common/accessibility';
+import { StoreState } from 'store';
 import { defineMessages, IntlShape, FormattedMessage, useIntl } from 'react-intl';
 
 interface Props {
@@ -63,15 +62,15 @@ export default class Settings extends Component<Props, State> {
   }
 
   block = (user: BlockedUser) => {
-    if (!confirm(this.props.intl.formatMessage(messages.blockUser, { userName: user.name }))) return;
+    if (!window.confirm(this.props.intl.formatMessage(messages.blockUser, { userName: user.name }))) return;
     this.setState({
-      unblockedUsers: this.state.unblockedUsers.filter(x => x !== user.id),
+      unblockedUsers: this.state.unblockedUsers.filter((x) => x !== user.id),
     });
     this.props.blockUser(user.id, user.name, 'permanently');
   };
 
   unblock = (user: BlockedUser) => {
-    if (!confirm(this.props.intl.formatMessage(messages.unblockUser, { userName: user.name }))) return;
+    if (!window.confirm(this.props.intl.formatMessage(messages.unblockUser, { userName: user.name }))) return;
     this.setState({ unblockedUsers: this.state.unblockedUsers.concat([user.id]) });
     this.props.unblockUser(user.id);
     this.props.onUnblockSomeone();
@@ -79,7 +78,7 @@ export default class Settings extends Component<Props, State> {
 
   hide = (user: User) => {
     this.setState({
-      unhiddenUsers: this.state.unhiddenUsers.filter(x => x !== user.id),
+      unhiddenUsers: this.state.unhiddenUsers.filter((x) => x !== user.id),
     });
     this.props.hideUser(user);
   };
@@ -115,7 +114,7 @@ export default class Settings extends Component<Props, State> {
           )}
           {!!hiddenUsersList.length && (
             <ul className="settings__list">
-              {hiddenUsersList.map(user => {
+              {hiddenUsersList.map((user) => {
                 const isUserUnhidden = unhiddenUsers.includes(user.id);
 
                 return (
@@ -164,7 +163,7 @@ export default class Settings extends Component<Props, State> {
 
             {!!blockedUsers.length && (
               <ul className="settings__list settings__blocked-users-list">
-                {blockedUsers.map(user => {
+                {blockedUsers.map((user) => {
                   const isUserUnblocked = unblockedUsers.includes(user.id);
 
                   return (

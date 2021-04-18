@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,12 +45,10 @@ type Rest struct {
 	Migrator         *Migrator
 	NotifyService    *notify.Service
 	ImageService     *image.Service
-	Streamer         *Streamer
 
 	AnonVote        bool
 	WebRoot         string
 	RemarkURL       string
-	AdminEmail      string
 	ReadOnlyAge     int
 	SharedSecret    string
 	ScoreThresholds struct {
@@ -62,6 +59,9 @@ type Rest struct {
 	EmailNotifications bool
 	EmojiEnabled       bool
 	SimpleView         bool
+	ProxyCORS          bool
+	SendJWTHeader      bool
+	AllowedAncestors   []string // sets Content-Security-Policy "frame-ancestors ..."
 
 	SSLConfig   SSLConfig
 	httpsServer *http.Server
@@ -78,6 +78,7 @@ type Rest struct {
 type LoadingCache interface {
 	Get(key lcw.Key, fn func() ([]byte, error)) (data []byte, err error) // load from cache if found or put to cache and return
 	Flush(req lcw.FlusherRequest)                                        // evict matched records
+	Close() error
 }
 
 const hardBodyLimit = 1024 * 64 // limit size of body
@@ -186,15 +187,24 @@ func (s *Rest) routes() chi.Router {
 
 	s.pubRest, s.privRest, s.adminRest, s.rssRest = s.controllerGroups() // assign controllers for groups
 
-	corsMiddleware := cors.New(cors.Options{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-XSRF-Token", "X-JWT"},
-		ExposedHeaders:   []string{"Authorization"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	})
-	router.Use(corsMiddleware.Handler)
+	if s.ProxyCORS {
+		log.Printf("[WARN] internal CORS disabled")
+	} else {
+		corsMiddleware := cors.New(cors.Options{
+			AllowedOrigins:   []string{"*"},
+			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+			AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-XSRF-Token", "X-JWT"},
+			ExposedHeaders:   []string{"Authorization"},
+			AllowCredentials: true,
+			MaxAge:           300,
+		})
+		router.Use(corsMiddleware.Handler)
+	}
+
+	if len(s.AllowedAncestors) > 0 {
+		log.Printf("[INFO] allowed from %+v only", s.AllowedAncestors)
+		router.Use(frameAncestors(s.AllowedAncestors))
+	}
 
 	ipFn := func(ip string) string { return store.HashValue(ip, s.SharedSecret)[:12] } // logger uses it for anonymization
 	logInfoWithBody := logger.New(logger.Log(log.Default()), logger.WithBody, logger.IPfn(ipFn), logger.Prefix("[INFO]")).Handler
@@ -203,13 +213,13 @@ func (s *Rest) routes() chi.Router {
 
 	router.Group(func(r chi.Router) {
 		r.Use(middleware.Timeout(5 * time.Second))
-		r.Use(logInfoWithBody, tollbooth_chi.LimitHandler(tollbooth.NewLimiter(5, nil)), middleware.NoCache)
+		r.Use(logInfoWithBody, tollbooth_chi.LimitHandler(tollbooth.NewLimiter(10, nil)), middleware.NoCache)
 		r.Mount("/auth", authHandler)
 	})
 
 	router.Group(func(r chi.Router) {
 		r.Use(middleware.Timeout(5 * time.Second))
-		r.Use(tollbooth_chi.LimitHandler(tollbooth.NewLimiter(100, nil)), middleware.NoCache)
+		r.Use(tollbooth_chi.LimitHandler(tollbooth.NewLimiter(100, nil)))
 		r.Mount("/avatar", avatarHandler)
 	})
 
@@ -221,7 +231,6 @@ func (s *Rest) routes() chi.Router {
 		rapi.Group(func(rava chi.Router) {
 			rava.Use(middleware.Timeout(5 * time.Second))
 			rava.Use(tollbooth_chi.LimitHandler(tollbooth.NewLimiter(100, nil)))
-			rava.Use(middleware.NoCache)
 			rava.Mount("/avatar", avatarHandler)
 		})
 
@@ -248,14 +257,6 @@ func (s *Rest) routes() chi.Router {
 				rrss.Get("/reply", s.rssRest.repliesCtrl)
 			})
 
-		})
-
-		// open routes, streams, no send timeout
-		rapi.Route("/stream", func(rstream chi.Router) {
-			rstream.Use(tollbooth_chi.LimitHandler(tollbooth.NewLimiter(10, nil)))
-			rstream.Use(authMiddleware.Trace, middleware.NoCache, logInfoWithBody)
-			rstream.Get("/info", s.pubRest.infoStreamCtrl)
-			rstream.Get("/last", s.pubRest.lastCommentsStreamCtrl)
 		})
 
 		// open routes, cached
@@ -353,7 +354,6 @@ func (s *Rest) controllerGroups() (public, private, admin, rss) {
 		commentFormatter: s.CommentFormatter,
 		readOnlyAge:      s.ReadOnlyAge,
 		webRoot:          s.WebRoot,
-		streamer:         s.Streamer,
 	}
 
 	privGrp := private{
@@ -365,7 +365,6 @@ func (s *Rest) controllerGroups() (public, private, admin, rss) {
 		authenticator:    s.Authenticator,
 		notifyService:    s.NotifyService,
 		remarkURL:        s.RemarkURL,
-		adminEmail:       s.AdminEmail,
 		anonVote:         s.AnonVote,
 		templates:        templates.NewFS(),
 	}
@@ -418,6 +417,7 @@ func (s *Rest) configCtrl(w http.ResponseWriter, r *http.Request) {
 		EmailNotifications bool     `json:"email_notifications"`
 		EmojiEnabled       bool     `json:"emoji_enabled"`
 		SimpleView         bool     `json:"simple_view"`
+		SendJWTHeader      bool     `json:"send_jwt_header"`
 	}{
 		Version:            s.Version,
 		EditDuration:       int(s.DataService.EditDuration.Seconds()),
@@ -433,6 +433,7 @@ func (s *Rest) configCtrl(w http.ResponseWriter, r *http.Request) {
 		EmojiEnabled:       s.EmojiEnabled,
 		AnonVote:           s.AnonVote,
 		SimpleView:         s.SimpleView,
+		SendJWTHeader:      s.SendJWTHeader,
 	}
 
 	cnf.Auth = []string{}
@@ -584,7 +585,7 @@ func cacheControl(expiration time.Duration, version string) func(http.Handler) h
 		fn := func(w http.ResponseWriter, r *http.Request) {
 			e := `"` + etag(r, version) + `"`
 			w.Header().Set("Etag", e)
-			w.Header().Set("Cache-Control", "max-age="+strconv.Itoa(int(expiration.Seconds())))
+			w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d, no-cache", int(expiration.Seconds())))
 
 			if match := r.Header.Get("If-None-Match"); match != "" {
 				if strings.Contains(match, e) {
@@ -592,6 +593,22 @@ func cacheControl(expiration time.Duration, version string) func(http.Handler) h
 					return
 				}
 			}
+			h.ServeHTTP(w, r)
+		}
+		return http.HandlerFunc(fn)
+	}
+}
+
+// frameAncestors is a middleware setting Content-Security-Policy "frame-ancestors host1 host2 ..."
+// prevents loading of comments widgets from any other origins. In case if the list of allowed empty, ignored.
+func frameAncestors(hosts []string) func(http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		fn := func(w http.ResponseWriter, r *http.Request) {
+			if len(hosts) == 0 {
+				h.ServeHTTP(w, r)
+				return
+			}
+			w.Header().Set("Content-Security-Policy", "frame-ancestors "+strings.Join(hosts, " ")+";")
 			h.ServeHTTP(w, r)
 		}
 		return http.HandlerFunc(fn)

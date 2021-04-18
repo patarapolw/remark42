@@ -1,4 +1,4 @@
-import { Node, Comment, CommentMode, Sorting } from '@app/common/types';
+import { Node, Comment, CommentMode, Sorting } from 'common/types';
 import { combineReducers } from 'redux';
 
 import {
@@ -20,7 +20,7 @@ import {
   COMMENTS_REQUEST_ACTIONS,
 } from './types';
 import { getPinnedComments, getInitialSort } from './utils';
-import { cmpRef } from '@app/utils/cmpRef';
+import { cmpRef } from 'utils/cmpRef';
 
 export const topComments = (
   state: Comment['id'][] = [],
@@ -30,7 +30,7 @@ export const topComments = (
     case COMMENTS_SET: {
       return cmpRef(
         state,
-        action.comments.map(x => x.comment.id)
+        action.comments.map((x) => x.comment.id)
       );
     }
     case COMMENTS_APPEND: {
@@ -146,7 +146,7 @@ export const pinnedComments = (
 ): Comment['id'][] => {
   switch (action.type) {
     case COMMENTS_SET: {
-      return getPinnedComments(action.comments).map(x => x.id);
+      return getPinnedComments(action.comments).map((x) => x.id);
     }
     case COMMENTS_EDIT: {
       const index = state.indexOf(action.comment.id);
@@ -162,7 +162,7 @@ export const pinnedComments = (
     case COMMENTS_PATCH: {
       if (!Object.prototype.hasOwnProperty.call(action.patch, 'pin')) return state;
       if (!action.patch.pin) {
-        return state.filter(x => action.ids.indexOf(x) === -1);
+        return state.filter((x) => action.ids.indexOf(x) === -1);
       }
       return [...state, ...action.ids].reduce<Comment['id'][]>((c, x) => {
         if (c.indexOf(x) === -1) {
@@ -177,7 +177,7 @@ export const pinnedComments = (
   }
 };
 
-function isFetching(state: boolean = false, action: COMMENTS_REQUEST_ACTIONS): boolean {
+function isFetching(state = false, action: COMMENTS_REQUEST_ACTIONS): boolean {
   switch (action.type) {
     case COMMENTS_REQUEST_FETCHING:
       return true;

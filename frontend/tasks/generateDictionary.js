@@ -19,7 +19,7 @@ function sortDict(dict) {
   );
 }
 
-locales.forEach(locale => {
+locales.forEach((locale) => {
   let currentDict = {};
   const pathToDict = getLocalePath({ locale });
   if (fs.existsSync(pathToDict)) {
@@ -32,9 +32,9 @@ locales.forEach(locale => {
   });
   currentDict = removeAbandonedKeys(keys, currentDict);
   currentDict = sortDict(currentDict);
-  fs.writeFileSync(pathToDict, JSON.stringify(currentDict, null, 2) + '\n');
+  fs.writeFileSync(pathToDict, `${JSON.stringify(currentDict, null, 2)}\n`);
   fs.writeFileSync(
     path.resolve(__dirname, `../app/utils/loadLocale.ts`),
-    renderLoadLocale(locales.filter(locale => locale !== 'en'))
+    renderLoadLocale(locales.filter((locale) => locale !== 'en'))
   );
 });

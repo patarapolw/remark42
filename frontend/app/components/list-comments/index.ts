@@ -1,5 +1,3 @@
-export { ListComments } from './list-comments';
+import './__item/list-comments__item.css';
 
-import './list-comments.scss';
-
-import './__item/list-comments__item.scss';
+export { default } from './list-comments';

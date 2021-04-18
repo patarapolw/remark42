@@ -40,7 +40,6 @@ type private struct {
 	notifyService    *notify.Service
 	authenticator    *auth.Service
 	remarkURL        string
-	adminEmail       string
 	anonVote         bool
 	templates        templates.FileReader
 }
@@ -119,13 +118,8 @@ func (s *private) createCommentCtrl(w http.ResponseWriter, r *http.Request) {
 	s.cache.Flush(cache.Flusher(comment.Locator.SiteID).
 		Scopes(comment.Locator.URL, lastCommentsScope, comment.User.ID, comment.Locator.SiteID))
 
-	// user notification
 	if s.notifyService != nil {
 		s.notifyService.Submit(notify.Request{Comment: finalComment})
-	}
-	// admin notification
-	if s.notifyService != nil && s.adminEmail != "" {
-		s.notifyService.Submit(notify.Request{Comment: finalComment, Email: s.adminEmail, ForAdmin: true})
 	}
 
 	log.Printf("[DEBUG] created commend %+v", finalComment)
@@ -269,7 +263,8 @@ func (s *private) sendEmailConfirmationCtrl(w http.ResponseWriter, r *http.Reque
 	address := r.URL.Query().Get("address")
 	siteID := r.URL.Query().Get("site")
 	if address == "" {
-		rest.SendErrorJSON(w, r, http.StatusBadRequest, errors.New("missing parameter"), "address parameter is required", rest.ErrInternal)
+		rest.SendErrorJSON(w, r, http.StatusBadRequest,
+			errors.New("missing parameter"), "address parameter is required", rest.ErrInternal)
 		return
 	}
 	existingAddress, err := s.dataService.GetUserEmail(siteID, user.ID)
@@ -277,7 +272,8 @@ func (s *private) sendEmailConfirmationCtrl(w http.ResponseWriter, r *http.Reque
 		log.Printf("[WARN] can't read email for %s, %v", user.ID, err)
 	}
 	if address == existingAddress {
-		rest.SendErrorJSON(w, r, http.StatusConflict, errors.New("already verified"), "email address is already verified for this user", rest.ErrInternal)
+		rest.SendErrorJSON(w, r, http.StatusConflict,
+			errors.New("already verified"), "email address is already verified for this user", rest.ErrInternal)
 		return
 	}
 	claims := token.Claims{
@@ -296,14 +292,12 @@ func (s *private) sendEmailConfirmationCtrl(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	s.notifyService.Submit(
-		notify.Request{
-			Email: address,
-			Verification: notify.VerificationMetadata{
-				SiteID: siteID,
-				User:   user.Name,
-				Token:  tkn,
-			},
+	s.notifyService.SubmitVerification(
+		notify.VerificationRequest{
+			SiteID: siteID,
+			User:   user.Name,
+			Email:  address,
+			Token:  tkn,
 		},
 	)
 
@@ -366,7 +360,8 @@ func (s *private) setConfirmedEmailCtrl(w http.ResponseWriter, r *http.Request) 
 func (s *private) emailUnsubscribeCtrl(w http.ResponseWriter, r *http.Request) {
 	tkn := r.URL.Query().Get("tkn")
 	if tkn == "" {
-		rest.SendErrorHTML(w, r, http.StatusBadRequest, errors.New("missing parameter"), "token parameter is required", rest.ErrInternal, s.templates)
+		rest.SendErrorHTML(w, r, http.StatusBadRequest,
+			errors.New("missing parameter"), "token parameter is required", rest.ErrInternal, s.templates)
 		return
 	}
 	siteID := r.URL.Query().Get("site")
@@ -378,13 +373,15 @@ func (s *private) emailUnsubscribeCtrl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.authenticator.TokenService().IsExpired(confClaims) {
-		rest.SendErrorHTML(w, r, http.StatusForbidden, errors.New("expired"), "failed to verify confirmation token", rest.ErrInternal, s.templates)
+		rest.SendErrorHTML(w, r, http.StatusForbidden,
+			errors.New("expired"), "failed to verify confirmation token", rest.ErrInternal, s.templates)
 		return
 	}
 
 	elems := strings.Split(confClaims.Handshake.ID, "::")
 	if len(elems) != 2 {
-		rest.SendErrorHTML(w, r, http.StatusBadRequest, errors.New(confClaims.Handshake.ID), "invalid handshake token", rest.ErrInternal, s.templates)
+		rest.SendErrorHTML(w, r, http.StatusBadRequest,
+			errors.New(confClaims.Handshake.ID), "invalid handshake token", rest.ErrInternal, s.templates)
 		return
 	}
 	userID := elems[0]
@@ -395,11 +392,14 @@ func (s *private) emailUnsubscribeCtrl(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[WARN] can't read email for %s, %v", userID, err)
 	}
 	if existingAddress == "" {
-		rest.SendErrorHTML(w, r, http.StatusConflict, errors.New("user is not subscribed"), "user does not have active email subscription", rest.ErrInternal, s.templates)
+		rest.SendErrorHTML(w, r, http.StatusConflict,
+			errors.New("user is not subscribed"), "user does not have active email subscription", rest.ErrInternal, s.templates)
 		return
 	}
 	if address != existingAddress {
-		rest.SendErrorHTML(w, r, http.StatusBadRequest, errors.New("wrong email unsubscription"), "email address in request does not match known for this user", rest.ErrInternal, s.templates)
+		rest.SendErrorHTML(w, r, http.StatusBadRequest,
+			errors.New("wrong email unsubscription"), "email address in request does not match known for this user",
+			rest.ErrInternal, s.templates)
 		return
 	}
 

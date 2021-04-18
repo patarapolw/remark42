@@ -40,7 +40,7 @@ func NewTitleExtractor(client http.Client) *TitleExtractor {
 // Get page for url and return title
 func (t *TitleExtractor) Get(url string) (string, error) {
 	client := http.Client{Timeout: t.client.Timeout, Transport: t.client.Transport}
-	b, err := t.cache.Get(url, func() (lcw.Value, error) {
+	b, err := t.cache.Get(url, func() (interface{}, error) {
 		resp, err := client.Get(url)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to load page %s", url)
@@ -63,11 +63,16 @@ func (t *TitleExtractor) Get(url string) (string, error) {
 
 	// on error save result (empty string) to cache too and return "" title
 	if err != nil {
-		_, _ = t.cache.Get(url, func() (lcw.Value, error) { return "", nil })
+		_, _ = t.cache.Get(url, func() (interface{}, error) { return "", nil })
 		return "", err
 	}
 
 	return b.(string), nil
+}
+
+// Close title extractor
+func (t *TitleExtractor) Close() error {
+	return t.cache.Close()
 }
 
 // get title from body reader, traverse recursively

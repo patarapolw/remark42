@@ -16,6 +16,7 @@ import (
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/go-pkgz/jrpc"
+	"github.com/go-pkgz/lcw/eventbus"
 	log "github.com/go-pkgz/lgr"
 	"github.com/kyokomi/emoji"
 	"github.com/pkg/errors"
@@ -50,7 +51,6 @@ type ServerCommand struct {
 	SMTP       SMTPGroup       `group:"smtp" namespace:"smtp" env-namespace:"SMTP"`
 	Image      ImageGroup      `group:"image" namespace:"image" env-namespace:"IMAGE"`
 	SSL        SSLGroup        `group:"ssl" namespace:"ssl" env-namespace:"SSL"`
-	Stream     StreamGroup     `group:"stream" namespace:"stream" env-namespace:"STREAM"`
 	ImageProxy ImageProxyGroup `group:"image-proxy" namespace:"image-proxy" env-namespace:"IMAGE_PROXY"`
 
 	Sites            []string      `long:"site" env:"SITE" default:"remark" description:"site names" env-delim:","`
@@ -72,17 +72,25 @@ type ServerCommand struct {
 	WebRoot          string        `long:"web-root" env:"REMARK_WEB_ROOT" default:"./web" description:"web root directory"`
 	UpdateLimit      float64       `long:"update-limit" env:"UPDATE_LIMIT" default:"0.5" description:"updates/sec limit"`
 	RestrictedWords  []string      `long:"restricted-words" env:"RESTRICTED_WORDS" description:"words prohibited to use in comments" env-delim:","`
+	RestrictedNames  []string      `long:"restricted-names" env:"RESTRICTED_NAMES" description:"names prohibited to use by user" env-delim:","`
 	EnableEmoji      bool          `long:"emoji" env:"EMOJI" description:"enable emoji"`
 	SimpleView       bool          `long:"simpler-view" env:"SIMPLE_VIEW" description:"minimal comment editor mode"`
+	ProxyCORS        bool          `long:"proxy-cors" env:"PROXY_CORS" description:"disable internal CORS and delegate it to proxy"`
+	AllowedHosts     []string      `long:"allowed-hosts" env:"ALLOWED_HOSTS" description:"limit hosts/sources allowed to embed comments"`
 
 	Auth struct {
 		TTL struct {
 			JWT    time.Duration `long:"jwt" env:"JWT" default:"5m" description:"jwt TTL"`
 			Cookie time.Duration `long:"cookie" env:"COOKIE" default:"200h" description:"auth cookie TTL"`
 		} `group:"ttl" namespace:"ttl" env-namespace:"TTL"`
+
+		SendJWTHeader bool   `long:"send-jwt-header" env:"SEND_JWT_HEADER" description:"send JWT as a header instead of cookie"`
+		SameSite      string `long:"same-site" env:"SAME_SITE" description:"set same site policy for cookies" choice:"default" choice:"none" choice:"lax" choice:"strict" default:"default"` // nolint
+
 		Google    AuthGroup `group:"google" namespace:"google" env-namespace:"GOOGLE" description:"Google OAuth"`
 		Github    AuthGroup `group:"github" namespace:"github" env-namespace:"GITHUB" description:"Github OAuth"`
 		Facebook  AuthGroup `group:"facebook" namespace:"facebook" env-namespace:"FACEBOOK" description:"Facebook OAuth"`
+		Microsoft AuthGroup `group:"microsoft" namespace:"microsoft" env-namespace:"MICROSOFT" description:"Microsoft OAuth"`
 		Yandex    AuthGroup `group:"yandex" namespace:"yandex" env-namespace:"YANDEX" description:"Yandex OAuth"`
 		Twitter   AuthGroup `group:"twitter" namespace:"twitter" env-namespace:"TWITTER" description:"Twitter OAuth"`
 		Dev       bool      `long:"dev" env:"DEV" description:"enable dev (local) oauth2"`
@@ -159,8 +167,9 @@ type AvatarGroup struct {
 
 // CacheGroup defines options group for cache params
 type CacheGroup struct {
-	Type string `long:"type" env:"TYPE" description:"type of cache" choice:"mem" choice:"none" default:"mem"` // nolint
-	Max  struct {
+	Type      string `long:"type" env:"TYPE" description:"type of cache" choice:"redis_pub_sub" choice:"mem" choice:"none" default:"mem"` // nolint
+	RedisAddr string `long:"redis_addr" env:"REDIS_ADDR" default:"127.0.0.1:6379" description:"address of redis cache, turn redis cache on for distributed cache"`
+	Max       struct {
 		Items int   `long:"items" env:"ITEMS" default:"1000" description:"max cached items"`
 		Value int   `long:"value" env:"VALUE" default:"65536" description:"max size of cached value"`
 		Size  int64 `long:"size" env:"SIZE" default:"50000000" description:"max size of total cache"`
@@ -172,7 +181,7 @@ type AdminGroup struct {
 	Type   string `long:"type" env:"TYPE" description:"type of admin store" choice:"shared" choice:"rpc" default:"shared"` //nolint
 	Shared struct {
 		Admins []string `long:"id" env:"ID" description:"admin(s) ids" env-delim:","`
-		Email  string   `long:"email" env:"EMAIL" default:"" description:"admin email"`
+		Email  []string `long:"email" env:"EMAIL" description:"admin emails" env-delim:","`
 	} `group:"shared" namespace:"shared" env-namespace:"SHARED"`
 	RPC RPCGroup `group:"rpc" namespace:"rpc" env-namespace:"RPC"`
 }
@@ -198,7 +207,7 @@ type NotifyGroup struct {
 		API     string        `long:"api" env:"API" default:"https://api.telegram.org/bot" description:"telegram api prefix"`
 	} `group:"telegram" namespace:"telegram" env-namespace:"TELEGRAM"`
 	Email struct {
-		From                string `long:"fromAddress" env:"FROM" description:"from email address"`
+		From                string `long:"from_address" env:"FROM" description:"from email address"`
 		VerificationSubject string `long:"verification_subj" env:"VERIFICATION_SUBJ" description:"verification message subject"`
 		AdminNotifications  bool   `long:"notify_admin" env:"ADMIN" description:"notify admin on new comments via ADMIN_SHARED_EMAIL"`
 	} `group:"email" namespace:"email" env-namespace:"EMAIL"`
@@ -214,13 +223,6 @@ type SSLGroup struct {
 	ACMEEmail    string `long:"acme-email" env:"ACME_EMAIL" description:"admin email for certificate notifications"`
 }
 
-// StreamGroup define options for streaming apis
-type StreamGroup struct {
-	RefreshInterval time.Duration `long:"refresh" env:"REFRESH" default:"5s" description:"refresh interval for streams"`
-	TimeOut         time.Duration `long:"timeout" env:"TIMEOUT" default:"15m" description:"timeout to close streams on inactivity"`
-	MaxActive       int           `long:"max" env:"MAX" default:"500" description:"max number of parallel streams"`
-}
-
 // RPCGroup defines options for remote modules (plugins)
 type RPCGroup struct {
 	API          string        `long:"api" env:"API" description:"rpc extension api url"`
@@ -233,6 +235,7 @@ type RPCGroup struct {
 type LoadingCache interface {
 	Get(key cache.Key, fn func() ([]byte, error)) (data []byte, err error) // load from cache if found or put to cache and return
 	Flush(req cache.FlusherRequest)                                        // evict matched records
+	Close() error
 }
 
 // serverApp holds all active objects
@@ -248,6 +251,8 @@ type serverApp struct {
 	imageService  *image.Service
 	authenticator *auth.Service
 	terminated    chan struct{}
+
+	authRefreshCache *authRefreshCache // stored only to close it properly on shutdown
 }
 
 // Execute is the entry point for "server" command, called by flag parser
@@ -319,7 +324,7 @@ func (s *ServerCommand) HandleDeprecatedFlags() (result []DeprecatedFlag) {
 func (s *ServerCommand) newServerApp() (*serverApp, error) {
 
 	if err := makeDirs(s.BackupLocation); err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to create backup store")
 	}
 
 	if !strings.HasPrefix(s.RemarkURL, "http://") && !strings.HasPrefix(s.RemarkURL, "https://") {
@@ -359,15 +364,19 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 
 	loadingCache, err := s.makeCache()
 	if err != nil {
+		_ = dataService.Close()
 		return nil, errors.Wrap(err, "failed to make cache")
 	}
 
 	avatarStore, err := s.makeAvatarStore()
 	if err != nil {
+		_ = dataService.Close()
 		return nil, errors.Wrap(err, "failed to make avatar store")
 	}
-	authenticator, err := s.makeAuthenticator(dataService, avatarStore, adminStore)
+	authRefreshCache := newAuthRefreshCache()
+	authenticator, err := s.makeAuthenticator(dataService, avatarStore, adminStore, authRefreshCache)
 	if err != nil {
+		_ = dataService.Close()
 		return nil, errors.Wrap(err, "failed to make authenticator")
 	}
 
@@ -414,39 +423,33 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 
 	sslConfig, err := s.makeSSLConfig()
 	if err != nil {
+		_ = dataService.Close()
 		return nil, errors.Wrap(err, "failed to make config of ssl server params")
 	}
 
 	srv := &api.Rest{
-		Version:          s.Revision,
-		DataService:      dataService,
-		WebRoot:          s.WebRoot,
-		RemarkURL:        s.RemarkURL,
-		ImageProxy:       imgProxy,
-		CommentFormatter: commentFormatter,
-		Migrator:         migr,
-		ReadOnlyAge:      s.ReadOnlyAge,
-		SharedSecret:     s.SharedSecret,
-		Authenticator:    authenticator,
-		Cache:            loadingCache,
-		NotifyService:    notifyService,
-		SSLConfig:        sslConfig,
-		UpdateLimiter:    s.UpdateLimit,
-		ImageService:     imageService,
-		Streamer: &api.Streamer{
-			TimeOut:   s.Stream.TimeOut,
-			Refresh:   s.Stream.RefreshInterval,
-			MaxActive: int32(s.Stream.MaxActive),
-		},
+		Version:            s.Revision,
+		DataService:        dataService,
+		WebRoot:            s.WebRoot,
+		RemarkURL:          s.RemarkURL,
+		ImageProxy:         imgProxy,
+		CommentFormatter:   commentFormatter,
+		Migrator:           migr,
+		ReadOnlyAge:        s.ReadOnlyAge,
+		SharedSecret:       s.SharedSecret,
+		Authenticator:      authenticator,
+		Cache:              loadingCache,
+		NotifyService:      notifyService,
+		SSLConfig:          sslConfig,
+		UpdateLimiter:      s.UpdateLimit,
+		ImageService:       imageService,
 		EmailNotifications: emailNotifications,
 		EmojiEnabled:       s.EnableEmoji,
 		AnonVote:           s.AnonymousVote && s.RestrictVoteIP,
 		SimpleView:         s.SimpleView,
-	}
-
-	// enable admin notifications only if admin email is set
-	if s.Notify.Email.AdminNotifications && s.Admin.Shared.Email != "" {
-		srv.AdminEmail = s.Admin.Shared.Email
+		ProxyCORS:          s.ProxyCORS,
+		AllowedAncestors:   s.AllowedHosts,
+		SendJWTHeader:      s.Auth.SendJWTHeader,
 	}
 
 	srv.ScoreThresholds.Low, srv.ScoreThresholds.Critical = s.LowScore, s.CriticalScore
@@ -455,23 +458,25 @@ func (s *ServerCommand) newServerApp() (*serverApp, error) {
 	if s.Auth.Dev {
 		da, errDevAuth := authenticator.DevAuth()
 		if errDevAuth != nil {
+			_ = dataService.Close()
 			return nil, errors.Wrap(errDevAuth, "can't make dev oauth2 server")
 		}
 		devAuth = da
 	}
 
 	return &serverApp{
-		ServerCommand: s,
-		restSrv:       srv,
-		migratorSrv:   migr,
-		exporter:      exporter,
-		devAuth:       devAuth,
-		dataService:   dataService,
-		avatarStore:   avatarStore,
-		notifyService: notifyService,
-		imageService:  imageService,
-		authenticator: authenticator,
-		terminated:    make(chan struct{}),
+		ServerCommand:    s,
+		restSrv:          srv,
+		migratorSrv:      migr,
+		exporter:         exporter,
+		devAuth:          devAuth,
+		dataService:      dataService,
+		avatarStore:      avatarStore,
+		notifyService:    notifyService,
+		imageService:     imageService,
+		authenticator:    authenticator,
+		terminated:       make(chan struct{}),
+		authRefreshCache: authRefreshCache,
 	}, nil
 }
 
@@ -490,7 +495,7 @@ func (a *serverApp) run(ctx context.Context) error {
 
 	a.activateBackup(ctx) // runs in goroutine for each site
 	if a.Auth.Dev {
-		go a.devAuth.Run(context.Background()) // dev oauth2 server on :8084
+		go a.devAuth.Run(ctx) // dev oauth2 server on :8084
 	}
 
 	// staging images resubmit after restart of the app
@@ -511,6 +516,12 @@ func (a *serverApp) run(ctx context.Context) error {
 	}
 	if e := a.avatarStore.Close(); e != nil {
 		log.Printf("[WARN] failed to close avatar store, %s", e)
+	}
+	if e := a.restSrv.Cache.Close(); e != nil {
+		log.Printf("[WARN] failed to close rest server cache, %s", e)
+	}
+	if e := a.authRefreshCache.Close(); e != nil {
+		log.Printf("[WARN] failed to close auth authRefreshCache, %s", e)
 	}
 	a.notifyService.Close()
 	// call potentially infinite loop with cancellation after a minute as a safeguard
@@ -575,12 +586,12 @@ func (s *ServerCommand) makeAvatarStore() (avatar.Store, error) {
 	switch s.Avatar.Type {
 	case "fs":
 		if err := makeDirs(s.Avatar.FS.Path); err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "failed to create avatar store")
 		}
 		return avatar.NewLocalFS(s.Avatar.FS.Path), nil
 	case "bolt":
 		if err := makeDirs(path.Dir(s.Avatar.Bolt.File)); err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "failed to create avatar store")
 		}
 		return avatar.NewBoltDB(s.Avatar.Bolt.File, bolt.Options{})
 	case "uri":
@@ -607,7 +618,7 @@ func (s *ServerCommand) makePicturesStore() (*image.Service, error) {
 		return image.NewService(boltImageStore, imageServiceParams), nil
 	case "fs":
 		if err := makeDirs(s.Image.FS.Path); err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "failed to create pictures store")
 		}
 		return image.NewService(&image.FileSystem{
 			Location:   s.Image.FS.Path,
@@ -631,12 +642,15 @@ func (s *ServerCommand) makeAdminStore() (admin.Store, error) {
 
 	switch s.Admin.Type {
 	case "shared":
-		if s.Admin.Shared.Email == "" { // no admin email, use admin@domain
+		sharedAdminEmail := ""
+		if len(s.Admin.Shared.Email) == 0 { // no admin email, use admin@domain
 			if u, err := url.Parse(s.RemarkURL); err == nil {
-				s.Admin.Shared.Email = "admin@" + u.Host
+				sharedAdminEmail = "admin@" + u.Host
 			}
+		} else {
+			sharedAdminEmail = s.Admin.Shared.Email[0]
 		}
-		return admin.NewStaticStore(s.SharedSecret, s.Sites, s.Admin.Shared.Admins, s.Admin.Shared.Email), nil
+		return admin.NewStaticStore(s.SharedSecret, s.Sites, s.Admin.Shared.Admins, sharedAdminEmail), nil
 	case "rpc":
 		r := &admin.RPC{Client: jrpc.Client{
 			API:        s.Admin.RPC.API,
@@ -653,6 +667,17 @@ func (s *ServerCommand) makeAdminStore() (admin.Store, error) {
 func (s *ServerCommand) makeCache() (LoadingCache, error) {
 	log.Printf("[INFO] make cache, type=%s", s.Cache.Type)
 	switch s.Cache.Type {
+	case "redis_pub_sub":
+		redisPubSub, err := eventbus.NewRedisPubSub(s.Cache.RedisAddr, "remark42-cache")
+		if err != nil {
+			return nil, errors.Wrap(err, "cache backend initialization, redis PubSub initialisation")
+		}
+		backend, err := cache.NewLruCache(cache.MaxCacheSize(s.Cache.Max.Size), cache.MaxValSize(s.Cache.Max.Value),
+			cache.MaxKeys(s.Cache.Max.Items), cache.EventBus(redisPubSub))
+		if err != nil {
+			return nil, errors.Wrap(err, "cache backend initialization")
+		}
+		return cache.NewScache(backend), nil
 	case "mem":
 		backend, err := cache.NewLruCache(cache.MaxCacheSize(s.Cache.Max.Size), cache.MaxValSize(s.Cache.Max.Value),
 			cache.MaxKeys(s.Cache.Max.Items))
@@ -679,6 +704,10 @@ func (s *ServerCommand) addAuthProviders(authenticator *auth.Service) error {
 	}
 	if s.Auth.Facebook.CID != "" && s.Auth.Facebook.CSEC != "" {
 		authenticator.AddProvider("facebook", s.Auth.Facebook.CID, s.Auth.Facebook.CSEC)
+		providers++
+	}
+	if s.Auth.Microsoft.CID != "" && s.Auth.Microsoft.CSEC != "" {
+		authenticator.AddProvider("microsoft", s.Auth.Microsoft.CID, s.Auth.Microsoft.CSEC)
 		providers++
 	}
 	if s.Auth.Yandex.CID != "" && s.Auth.Yandex.CSEC != "" {
@@ -720,6 +749,13 @@ func (s *ServerCommand) addAuthProviders(authenticator *auth.Service) error {
 		log.Print("[INFO] anonymous access enabled")
 		var isValidAnonName = regexp.MustCompile(`^[\p{L}\d_ ]+$`).MatchString
 		authenticator.AddDirectProvider("anonymous", provider.CredCheckerFunc(func(user, _ string) (ok bool, err error) {
+
+			// don't allow anon with space prefix or suffix
+			if strings.HasPrefix(user, " ") || strings.HasSuffix(user, " ") {
+				log.Printf("[WARN] name %q has space as a suffix or prefix", user)
+				return false, nil
+			}
+
 			user = strings.TrimSpace(user)
 			if len(user) < 3 {
 				log.Printf("[WARN] name %q is too short, should be at least 3 characters", user)
@@ -802,6 +838,9 @@ func (s *ServerCommand) makeNotify(dataStore *service.DataStore, authenticator *
 					return tkn, nil
 				},
 			}
+			if s.Notify.Email.AdminNotifications {
+				emailParams.AdminEmails = s.Admin.Shared.Email
+			}
 			smtpParams := notify.SMTPParams{
 				Host:     s.SMTP.Host,
 				Port:     s.SMTP.Port,
@@ -850,8 +889,8 @@ func (s *ServerCommand) makeSSLConfig() (config api.SSLConfig, err error) {
 		config.ACMELocation = s.SSL.ACMELocation
 		if s.SSL.ACMEEmail != "" {
 			config.ACMEEmail = s.SSL.ACMEEmail
-		} else if s.Admin.Type == "shared" && s.Admin.Shared.Email != "" {
-			config.ACMEEmail = s.Admin.Shared.Email
+		} else if s.Admin.Type == "shared" && len(s.Admin.Shared.Email) != 0 {
+			config.ACMEEmail = s.Admin.Shared.Email[0]
 		} else if u, e := url.Parse(s.RemarkURL); e == nil {
 			config.ACMEEmail = "admin@" + u.Hostname()
 		}
@@ -859,15 +898,17 @@ func (s *ServerCommand) makeSSLConfig() (config api.SSLConfig, err error) {
 	return config, err
 }
 
-func (s *ServerCommand) makeAuthenticator(ds *service.DataStore, avas avatar.Store, admns admin.Store) (*auth.Service, error) {
+func (s *ServerCommand) makeAuthenticator(ds *service.DataStore, avas avatar.Store, admns admin.Store, authRefreshCache *authRefreshCache) (*auth.Service, error) {
 	authenticator := auth.NewService(auth.Opts{
 		URL:            strings.TrimSuffix(s.RemarkURL, "/"),
 		Issuer:         "remark42",
 		TokenDuration:  s.Auth.TTL.JWT,
 		CookieDuration: s.Auth.TTL.Cookie,
+		SendJWTHeader:  s.Auth.SendJWTHeader,
+		SameSiteCookie: s.parseSameSite(s.Auth.SameSite),
 		SecureCookies:  strings.HasPrefix(s.RemarkURL, "https://"),
 		SecretReader: token.SecretFunc(func(aud string) (string, error) { // get secret per site
-			return admns.Key()
+			return admns.Key("")
 		}),
 		ClaimsUpd: token.ClaimsUpdFunc(func(c token.Claims) token.Claims { // set attributes, on new token or refresh
 			if c.User == nil {
@@ -881,15 +922,12 @@ func (s *ServerCommand) makeAuthenticator(ds *service.DataStore, avas avatar.Sto
 				log.Printf("[WARN] can't read email for %s, %v", c.User.ID, err)
 			}
 
-			// don't allow anonymous with admin's name
-			if strings.HasPrefix(c.User.ID, "anonymous_") {
-				admins, err := admns.Admins(c.Audience)
-				if err != nil {
-					log.Printf("[WARN] can't get admins for %s, %v", c.Audience, err)
-				}
-				for _, a := range admins {
-					if strings.EqualFold(c.User.Name, a) {
+			// don't allow anonymous and email with admin's name
+			if strings.HasPrefix(c.User.ID, "anonymous_") || strings.HasPrefix(c.User.ID, "email_") {
+				for _, a := range s.RestrictedNames {
+					if strings.EqualFold(strings.TrimSpace(c.User.Name), a) {
 						c.User.SetBoolAttr("blocked", true)
+						log.Printf("[INFO] blocked %+v, attempt to impersonate (restricted names)", c.User)
 						break
 					}
 				}
@@ -912,7 +950,7 @@ func (s *ServerCommand) makeAuthenticator(ds *service.DataStore, avas avatar.Sto
 		AvatarResizeLimit: s.Avatar.RszLmt,
 		AvatarRoutePath:   "/api/v1/avatar",
 		Logger:            log.Default(),
-		RefreshCache:      newAuthRefreshCache(),
+		RefreshCache:      authRefreshCache,
 		UseGravatar:       true,
 	})
 
@@ -921,6 +959,21 @@ func (s *ServerCommand) makeAuthenticator(ds *service.DataStore, avas avatar.Sto
 	}
 
 	return authenticator, nil
+}
+
+func (s *ServerCommand) parseSameSite(ss string) http.SameSite {
+	switch strings.ToLower(ss) {
+	case "default":
+		return http.SameSiteDefaultMode
+	case "none":
+		return http.SameSiteNoneMode
+	case "lax":
+		return http.SameSiteLaxMode
+	case "strict":
+		return http.SameSiteStrictMode
+	default:
+		return http.SameSiteDefaultMode
+	}
 }
 
 // authRefreshCache used by authenticator to minimize repeatable token refreshes
@@ -940,5 +993,5 @@ func (c *authRefreshCache) Get(key interface{}) (interface{}, bool) {
 
 // Set implements cache setter with key converted to string
 func (c *authRefreshCache) Set(key, value interface{}) {
-	_, _ = c.LoadingCache.Get(key.(string), func() (cache.Value, error) { return value, nil })
+	_, _ = c.LoadingCache.Get(key.(string), func() (interface{}, error) { return value, nil })
 }

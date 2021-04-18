@@ -39,6 +39,8 @@ type Params struct {
 	Csecret     string
 	Issuer      string
 	AvatarSaver AvatarSaver
+
+	Port int // relevant for providers supporting port customization, for example dev oauth2
 }
 
 // UserData is type for user information returned from oauth2 providers /info API method
@@ -178,7 +180,7 @@ func (p Oauth2Handler) AuthHandler(w http.ResponseWriter, r *http.Request) {
 	p.Logf("[DEBUG] got raw user info %+v", jData)
 
 	u := p.mapUser(jData, data)
-	u, err = setAvatar(p.AvatarSaver, u)
+	u, err = setAvatar(p.AvatarSaver, u, client)
 	if err != nil {
 		rest.SendErrorJSON(w, r, p.L, http.StatusInternalServerError, err, "failed to save avatar to proxy")
 		return
@@ -211,7 +213,7 @@ func (p Oauth2Handler) AuthHandler(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, oauthClaims.Handshake.From, http.StatusTemporaryRedirect)
 		return
 	}
-	rest.RenderJSON(w, r, &u)
+	rest.RenderJSON(w, &u)
 }
 
 // LogoutHandler - GET /logout

@@ -52,6 +52,7 @@ func TestService_CreateFromEmpty(t *testing.T) {
 	assert.Equal(t, "name", res.User.Name)
 	assert.Equal(t, "23f97cf4d5c29ef788ca2bdd1c9e75656c0e4149", res.User.IP)
 	assert.Equal(t, map[string]bool(nil), res.Votes)
+	assert.Equal(t, map[string]store.VotedIPInfo(nil), res.VotedIPs)
 }
 
 func TestService_CreateSiteDisabled(t *testing.T) {
@@ -79,8 +80,10 @@ func TestService_CreateFromPartial(t *testing.T) {
 		Text:      "text",
 		Timestamp: time.Date(2018, 3, 25, 16, 34, 33, 0, time.UTC),
 		Votes:     map[string]bool{"u1": true, "u2": false},
-		User:      store.User{IP: "192.168.1.1", ID: "user", Name: "name"},
-		Locator:   store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"},
+		VotedIPs: map[string]store.VotedIPInfo{"xxx": {Value: true, Timestamp: time.Now()},
+			"yyy": {Value: false, Timestamp: time.Now()}},
+		User:    store.User{IP: "192.168.1.1", ID: "user", Name: "name"},
+		Locator: store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"},
 	}
 	id, err := b.Create(comment)
 	assert.NoError(t, err)
@@ -104,6 +107,7 @@ func TestService_CreateFromPartialWithTitle(t *testing.T) {
 	defer teardown()
 	b := DataStore{Engine: eng, AdminStore: ks,
 		TitleExtractor: NewTitleExtractor(http.Client{Timeout: 5 * time.Second})}
+	defer b.Close()
 
 	postPath := "/post/42"
 	postTitle := "Post Title 42"
@@ -168,6 +172,7 @@ func TestService_SetTitle(t *testing.T) {
 	defer teardown()
 	b := DataStore{Engine: eng, AdminStore: ks,
 		TitleExtractor: NewTitleExtractor(http.Client{Timeout: 5 * time.Second})}
+	defer b.Close()
 	comment := store.Comment{
 		Text:      "text",
 		Timestamp: time.Date(2018, 3, 25, 16, 34, 33, 0, time.UTC),
@@ -192,8 +197,9 @@ func TestService_SetTitle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "post1 blah 123", c.PostTitle)
 
-	b = DataStore{Engine: eng, AdminStore: ks}
-	_, err = b.SetTitle(store.Locator{URL: tss.URL + "/post1", SiteID: "radio-t"}, id)
+	bErr := DataStore{Engine: eng, AdminStore: ks}
+	defer bErr.Close()
+	_, err = bErr.SetTitle(store.Locator{URL: tss.URL + "/post1", SiteID: "radio-t"}, id)
 	require.EqualError(t, err, "no title extractor")
 }
 
@@ -238,12 +244,14 @@ func TestService_Vote(t *testing.T) {
 	assert.Equal(t, 1, c.Score)
 	assert.Equal(t, 1, c.Vote, "can see own vote result")
 	assert.Nil(t, c.Votes)
+	assert.Nil(t, c.VotedIPs)
 	// check result as user2
 	c, err = b.Get(store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"}, res[0].ID, store.User{ID: "user2"})
 	assert.NoError(t, err)
 	assert.Equal(t, 1, c.Score)
 	assert.Equal(t, 0, c.Vote, "can't see other user vote result")
 	assert.Nil(t, c.Votes)
+	assert.Nil(t, c.VotedIPs)
 
 	req = VoteReq{
 		Locator:   store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"},
@@ -299,6 +307,7 @@ func TestService_Vote(t *testing.T) {
 	assert.Equal(t, 0, res[0].Score)
 	assert.Equal(t, 0, res[0].Vote)
 	assert.Equal(t, map[string]bool(nil), res[0].Votes, "vote reset ok")
+	assert.Equal(t, map[string]store.VotedIPInfo(nil), res[0].VotedIPs, "vote reset ok")
 }
 
 func TestService_VoteLimit(t *testing.T) {
@@ -381,10 +390,11 @@ func TestService_VoteAggressive(t *testing.T) {
 	assert.Equal(t, 2, res[0].Score, "add single +1")
 	assert.Equal(t, 1, res[0].Vote, "user1 voted +1")
 	assert.Equal(t, 0, len(res[0].Votes), "votes hidden")
+	assert.Equal(t, 0, len(res[0].VotedIPs), "vote ips hidden")
 
 	// random +1/-1 result should be [0..2]
 	rand.Seed(time.Now().UnixNano())
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -433,6 +443,7 @@ func TestService_VoteConcurrent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 100, res[0].Score, "should have 100 score")
 	assert.Equal(t, 0, len(res[0].Votes), "should hide votes")
+	assert.Equal(t, 0, len(res[0].VotedIPs), "should hide vote ips")
 	assert.Equal(t, 0.0, res[0].Controversy, "should have 0 controversy")
 }
 
@@ -452,7 +463,29 @@ func TestService_VotePositive(t *testing.T) {
 	assert.NoError(t, err, "minimal score doesn't affect positive vote")
 	assert.Equal(t, 1, c.Score)
 
-	b.PositiveScore = false // allow negative voting
+	c, err = b.Vote(VoteReq{Locator: store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"}, CommentID: "id-1",
+		UserID: "user2", Val: true})
+	assert.NoError(t, err, "vote set to +2")
+	assert.Equal(t, 2, c.Score)
+
+	// check +, -, -
+	c, err = b.Vote(VoteReq{Locator: store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"}, CommentID: "id-1",
+		UserID: "user5", Val: true})
+	assert.NoError(t, err, "user5 +1, score 3")
+	assert.Equal(t, 3, c.Score)
+
+	c, err = b.Vote(VoteReq{Locator: store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"}, CommentID: "id-1",
+		UserID: "user5", Val: false})
+	assert.NoError(t, err, "user5 -1, score reset to 2")
+	assert.Equal(t, 2, c.Score)
+
+	c, err = b.Vote(VoteReq{Locator: store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"}, CommentID: "id-1",
+		UserID: "user5", Val: false})
+	assert.NoError(t, err, "user5 -1, score 1")
+	assert.Equal(t, 1, c.Score)
+
+	// allow negative voting
+	b.PositiveScore = false
 	c, err = b.Vote(VoteReq{Locator: store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"}, CommentID: "id-1",
 		UserID: "user2", Val: false})
 	assert.NoError(t, err, "minimal score ignored")
@@ -501,8 +534,7 @@ func TestService_VoteSameIP(t *testing.T) {
 
 	eng, teardown := prepStoreEngine(t)
 	defer teardown()
-	b := DataStore{Engine: eng, AdminStore: admin.NewStaticKeyStore("secret 123"),
-		MaxVotes: -1}
+	b := DataStore{Engine: eng, AdminStore: admin.NewStaticKeyStore("secret 123"), MaxVotes: -1}
 	b.RestrictSameIPVotes.Enabled = true
 
 	c, err := b.Vote(VoteReq{Locator: store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"}, CommentID: "id-2",
@@ -513,12 +545,17 @@ func TestService_VoteSameIP(t *testing.T) {
 	c, err = b.Vote(VoteReq{Locator: store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"}, CommentID: "id-2",
 		UserID: "user3", UserIP: "123", Val: true})
 	assert.EqualError(t, err, "the same ip cce61be6e0a692420ae0de31dceca179123c3b8a already voted for id-2")
-	assert.Equal(t, 1, c.Score, "still have 1 score")
+	assert.Equal(t, 1, c.Score, "still have 1 score, rejected")
 
 	c, err = b.Vote(VoteReq{Locator: store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"}, CommentID: "id-2",
-		UserID: "user3", UserIP: "123", Val: false})
+		UserID: "user2", UserIP: "123", Val: false})
 	assert.NoError(t, err)
 	assert.Equal(t, 0, c.Score, "reset to 0 score, opposite vote allowed")
+
+	c, err = b.Vote(VoteReq{Locator: store.Locator{URL: "https://radio-t.com", SiteID: "radio-t"}, CommentID: "id-2",
+		UserID: "user2", UserIP: "123", Val: false})
+	assert.NoError(t, err)
+	assert.Equal(t, -1, c.Score, "set to -1 score, correction vote allowed")
 }
 
 func TestService_VoteSameIPWithDuration(t *testing.T) {
@@ -609,6 +646,7 @@ func TestService_EditComment(t *testing.T) {
 	eng, teardown := prepStoreEngine(t)
 	defer teardown()
 	b := DataStore{Engine: eng, AdminStore: admin.NewStaticKeyStore("secret 123")}
+	defer b.Close()
 
 	res, err := b.Last("radio-t", 0, time.Time{}, store.User{})
 	t.Logf("%+v", res[0])
@@ -638,6 +676,7 @@ func TestService_DeleteComment(t *testing.T) {
 	eng, teardown := prepStoreEngine(t)
 	defer teardown()
 	b := DataStore{Engine: eng, AdminStore: admin.NewStaticKeyStore("secret 123")}
+	defer b.Close()
 
 	res, err := b.Last("radio-t", 0, time.Time{}, store.User{})
 	t.Logf("%+v", res[0])
@@ -679,6 +718,7 @@ func TestService_EditCommentReplyFailed(t *testing.T) {
 	eng, teardown := prepStoreEngine(t)
 	defer teardown()
 	b := DataStore{Engine: eng, AdminStore: admin.NewStaticKeyStore("secret 123")}
+	defer b.Close()
 
 	res, err := b.Last("radio-t", 0, time.Time{}, store.User{})
 	t.Logf("%+v", res[1])
@@ -882,7 +922,6 @@ func TestService_IsAdmin(t *testing.T) {
 	assert.False(t, b.IsAdmin("radio-t", "user1"))
 	assert.True(t, b.IsAdmin("radio-t", "user2"))
 	assert.False(t, b.IsAdmin("radio-t-bad", "user1"))
-
 }
 
 func TestService_HasReplies(t *testing.T) {
@@ -892,6 +931,7 @@ func TestService_HasReplies(t *testing.T) {
 	defer teardown()
 	b := DataStore{Engine: eng, EditDuration: 100 * time.Millisecond,
 		AdminStore: admin.NewStaticStore("secret 123", []string{"radio-t"}, []string{"user2"}, "user@email.com")}
+	defer b.Close()
 
 	comment := store.Comment{
 		ID:        "id-1",
@@ -1303,7 +1343,7 @@ func TestService_submitImages(t *testing.T) {
 	_, err := b.Engine.Create(c) // create directly with engine, doesn't call submitImages
 	assert.NoError(t, err)
 
-	b.submitImages(c.Locator, c.ID)
+	b.submitImages(c)
 	time.Sleep(250 * time.Millisecond)
 	mockStore.AssertNumberOfCalls(t, "Commit", 2)
 }
@@ -1417,9 +1457,11 @@ func TestService_alterComment(t *testing.T) {
 	engineMock.On("Flag", engine.FlagRequest{Flag: engine.Verified, UserID: "devid"}).Return(false, nil)
 	svc := DataStore{Engine: &engineMock}
 
-	r := svc.alterComment(store.Comment{ID: "123", User: store.User{IP: "127.0.0.1", ID: "devid"}},
+	r := svc.alterComment(store.Comment{ID: "123", User: store.User{IP: "127.0.0.1", ID: "devid"},
+		Locator: store.Locator{URL: "http://example.com?foo=bar"}},
 		store.User{Name: "dev", ID: "devid", Admin: false})
-	assert.Equal(t, store.Comment{ID: "123", User: store.User{IP: "", ID: "devid"}}, r, "ip cleaned")
+	assert.Equal(t, store.Comment{ID: "123", User: store.User{IP: "", ID: "devid"},
+		Locator: store.Locator{URL: "http://example.com?foo=bar"}}, r, "ip cleaned")
 	r = svc.alterComment(store.Comment{ID: "123", User: store.User{IP: "127.0.0.1", ID: "devid"}},
 		store.User{Name: "dev", ID: "devid", Admin: true})
 	assert.Equal(t, store.Comment{ID: "123", User: store.User{IP: "127.0.0.1", ID: "devid"}}, r, "ip not cleaned")
@@ -1436,7 +1478,8 @@ func TestService_alterComment(t *testing.T) {
 	engineMock.On("Flag", engine.FlagRequest{Flag: engine.Blocked, UserID: "devid"}).Return(true, nil)
 	engineMock.On("Flag", engine.FlagRequest{Flag: engine.Verified, UserID: "devid"}).Return(false, nil)
 	svc = DataStore{Engine: &engineMock}
-	r = svc.alterComment(store.Comment{ID: "123", User: store.User{IP: "127.0.0.1", ID: "devid", Verified: true}},
+	r = svc.alterComment(store.Comment{ID: "123", User: store.User{IP: "127.0.0.1", ID: "devid", Verified: true},
+		Locator: store.Locator{URL: "javascript:alert('XSS1')"}},
 		store.User{Name: "dev", ID: "devid", Admin: false})
 	assert.Equal(t, store.Comment{ID: "123", User: store.User{IP: "", Verified: true, Blocked: true, ID: "devid"},
 		Deleted: false}, r, "blocked")

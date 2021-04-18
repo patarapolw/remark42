@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"html/template"
 	"regexp"
 	"strings"
@@ -26,6 +27,7 @@ type Comment struct {
 	Edit        *Edit                  `json:"edit,omitempty" bson:"edit,omitempty"` // pointer to have empty default in json response
 	Pin         bool                   `json:"pin,omitempty" bson:"pin,omitempty"`
 	Deleted     bool                   `json:"delete,omitempty" bson:"delete"`
+	Imported    bool                   `json:"imported,omitempty" bson:"imported"`
 	PostTitle   string                 `json:"title,omitempty" bson:"title"`
 }
 
@@ -82,6 +84,7 @@ func (c *Comment) PrepareUntrusted() {
 	c.ID = ""                 // don't allow user to define ID, force auto-gen
 	c.Timestamp = time.Time{} // reset time, force auto-gen
 	c.Votes = make(map[string]bool)
+	c.VotedIPs = make(map[string]VotedIPInfo)
 	c.Score = 0
 	c.Edit = nil
 	c.Pin = false
@@ -94,6 +97,7 @@ func (c *Comment) SetDeleted(mode DeleteMode) {
 	c.Orig = ""
 	c.Score = 0
 	c.Votes = map[string]bool{}
+	c.VotedIPs = make(map[string]VotedIPInfo)
 	c.Edit = nil
 	c.Deleted = true
 	c.Pin = false
@@ -117,11 +121,13 @@ func (c *Comment) Sanitize() {
 		"|vi|vm|l|ld|s|sa|sb|sc|dl|sd|s2|se|sh|si|sx|sr|s1|ss|m|mb|mf|mh|mi|il" +
 		"|mo|o|ow|p|c|ch|cm|cp|cpf|c1|cs|g|gd|ge|gr|gh|gi|go|gp|gs|gu|gt|gl)$"
 	p.AllowAttrs("class").Matching(regexp.MustCompile(codeSpanClassRegex)).OnElements("span")
+	p.AllowAttrs("loading").Matching(regexp.MustCompile("^(lazy|eager)$")).OnElements("img")
 	c.Text = p.Sanitize(c.Text)
 	c.Orig = p.Sanitize(c.Orig)
 	c.User.ID = template.HTMLEscapeString(c.User.ID)
 	c.User.Name = c.escapeHTMLWithSome(c.User.Name)
-	c.User.Picture = p.Sanitize(c.User.Picture)
+	c.User.Picture = c.SanitizeAsURL(c.User.Picture)
+	c.Locator.URL = c.SanitizeAsURL(c.Locator.URL)
 }
 
 // Snippet from comment's text
@@ -143,6 +149,19 @@ func (c *Comment) Snippet(limit int) string {
 		}
 	}
 	return string(snippet) + " ..."
+}
+
+var reHref = regexp.MustCompile(`<a\s+(?:[^>]*?\s+)?href="([^"]*)"`)
+
+// SanitizeAsURL drops dangerous code from a url.
+// It wraps input with href to trigger bluemonday sanitizer and cleans href after sanitizing done
+func (c *Comment) SanitizeAsURL(inp string) string {
+	h := fmt.Sprintf(`<a href="%s">`, inp)
+	clean := bluemonday.UGCPolicy().Sanitize(h)
+	if match := reHref.FindStringSubmatch(clean); len(match) > 1 {
+		return match[1]
+	}
+	return "" // this shouldn't happen as we build the href
 }
 
 func (c *Comment) escapeHTMLWithSome(inp string) string {

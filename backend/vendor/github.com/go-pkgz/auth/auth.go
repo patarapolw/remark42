@@ -1,4 +1,4 @@
-// Package auth provides "social login" with Github, Google, Facebook and Yandex as well as custom auth providers.
+// Package auth provides "social login" with Github, Google, Facebook, Microsoft, Yandex and Battle.net as well as custom auth providers.
 package auth
 
 import (
@@ -53,6 +53,9 @@ type Opts struct {
 	XSRFHeaderKey  string // default "X-XSRF-TOKEN"
 	JWTQuery       string // default "token"
 
+	SendJWTHeader  bool          // if enabled send JWT as a header instead of cookie
+	SameSiteCookie http.SameSite // limit cross-origin requests with SameSite cookie attribute
+
 	Issuer string // optional value for iss claim, usually the application name, default "go-pkgz/auth"
 
 	URL       string          // root url for the rest service, i.e. http://blah.example.com, required
@@ -105,10 +108,12 @@ func NewService(opts Opts) (res *Service) {
 		JWTHeaderKey:   opts.JWTHeaderKey,
 		XSRFCookieName: opts.XSRFCookieName,
 		XSRFHeaderKey:  opts.XSRFHeaderKey,
+		SendJWTHeader:  opts.SendJWTHeader,
 		JWTQuery:       opts.JWTQuery,
 		Issuer:         res.issuer,
 		AudienceReader: opts.AudienceReader,
 		AudSecrets:     opts.AudSecrets,
+		SameSite:       opts.SameSiteCookie,
 	})
 
 	if opts.SecretReader == nil {
@@ -154,7 +159,7 @@ func (s *Service) Handlers() (authHandler, avatarHandler http.Handler) {
 			for _, p := range s.providers {
 				list = append(list, p.Name())
 			}
-			rest.RenderJSON(w, r, list)
+			rest.RenderJSON(w, list)
 			return
 		}
 
@@ -162,7 +167,7 @@ func (s *Service) Handlers() (authHandler, avatarHandler http.Handler) {
 		if elems[len(elems)-1] == "logout" {
 			if len(s.providers) == 0 {
 				w.WriteHeader(http.StatusBadRequest)
-				rest.RenderJSON(w, r, rest.JSON{"error": "provides not defined"})
+				rest.RenderJSON(w, rest.JSON{"error": "provides not defined"})
 				return
 			}
 			s.providers[0].Handler(w, r)
@@ -174,10 +179,10 @@ func (s *Service) Handlers() (authHandler, avatarHandler http.Handler) {
 			claims, _, err := s.jwtService.Get(r)
 			if err != nil {
 				w.WriteHeader(http.StatusUnauthorized)
-				rest.RenderJSON(w, r, rest.JSON{"error": err.Error()})
+				rest.RenderJSON(w, rest.JSON{"error": err.Error()})
 				return
 			}
-			rest.RenderJSON(w, r, claims.User)
+			rest.RenderJSON(w, claims.User)
 			return
 		}
 
@@ -186,7 +191,7 @@ func (s *Service) Handlers() (authHandler, avatarHandler http.Handler) {
 		p, err := s.Provider(provName)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
-			rest.RenderJSON(w, r, rest.JSON{"error": fmt.Sprintf("provider %s not supported", provName)})
+			rest.RenderJSON(w, rest.JSON{"error": fmt.Sprintf("provider %s not supported", provName)})
 			return
 		}
 		p.Handler(w, r)
@@ -222,6 +227,10 @@ func (s *Service) AddProvider(name, cid, csecret string) {
 		s.providers = append(s.providers, provider.NewService(provider.NewFacebook(p)))
 	case "yandex":
 		s.providers = append(s.providers, provider.NewService(provider.NewYandex(p)))
+	case "battlenet":
+		s.providers = append(s.providers, provider.NewService(provider.NewBattlenet(p)))
+	case "microsoft":
+		s.providers = append(s.providers, provider.NewService(provider.NewMicrosoft(p)))
 	case "twitter":
 		s.providers = append(s.providers, provider.NewService(provider.NewTwitter(p)))
 	case "dev":
@@ -231,6 +240,19 @@ func (s *Service) AddProvider(name, cid, csecret string) {
 	}
 
 	s.authMiddleware.Providers = s.providers
+}
+
+// AddDevProvider with a custom port
+func (s *Service) AddDevProvider(port int) {
+	p := provider.Params{
+		URL:         s.opts.URL,
+		JwtService:  s.jwtService,
+		Issuer:      s.issuer,
+		AvatarSaver: s.avatarProxy,
+		L:           s.logger,
+		Port:        port,
+	}
+	s.providers = append(s.providers, provider.NewService(provider.NewDev(p)))
 }
 
 // AddCustomProvider adds custom provider (e.g. https://gopkg.in/oauth2.v3)
@@ -277,6 +299,12 @@ func (s *Service) AddVerifProvider(name, msgTmpl string, sender provider.Sender)
 		UseGravatar:  s.useGravatar,
 	}
 	s.providers = append(s.providers, provider.NewService(dh))
+	s.authMiddleware.Providers = s.providers
+}
+
+// AddCustomHandler adds user-defined self-implemented handler of auth provider
+func (s *Service) AddCustomHandler(handler provider.Provider) {
+	s.providers = append(s.providers, provider.NewService(handler))
 	s.authMiddleware.Providers = s.providers
 }
 

@@ -101,12 +101,13 @@ func (s *DataStore) Create(comment store.Comment) (commentID string, err error) 
 		comment.PostTitle = title
 	}()
 
-	s.submitImages(comment.Locator, comment.ID)
+	commentID, err = s.Engine.Create(comment)
+	s.submitImages(comment)
+
 	if e := s.AdminStore.OnEvent(comment.Locator.SiteID, admin.EvCreate); e != nil {
 		log.Printf("[WARN] failed to send create event, %s", e)
 	}
-
-	return s.Engine.Create(comment)
+	return commentID, err
 }
 
 // Find wraps engine's Find call and alter results if needed. User used to alter comments
@@ -124,7 +125,8 @@ func (s *DataStore) FindSince(locator store.Locator, sortMethod string, user sto
 	}
 
 	changedSort := false
-	// set votes controversy for comments added prior to #274
+	// sets votes controversy for comments added prior to #274
+	// also sanitizes locator.URL for comments added prior to #927
 	for i, c := range comments {
 		if c.Controversy == 0 && len(c.Votes) > 0 {
 			c.Controversy = s.controversy(s.upsAndDowns(c))
@@ -217,32 +219,42 @@ func (s *DataStore) ResubmitStagingImages(sites []string) error {
 		comments, err := s.FindSince(locator, "time", store.User{}, ts)
 		result = multierror.Append(result, errors.Wrapf(err, "problem finding comments for site %s", site))
 		for _, c := range comments {
-			s.submitImages(c.Locator, c.ID)
+			s.submitImages(c)
 		}
 	}
 	return result.ErrorOrNil()
 }
 
 // submitImages initiated delayed commit of all images from the comment uploaded to remark42
-func (s *DataStore) submitImages(locator store.Locator, commentID string) {
-
-	s.ImageService.Submit(func() []string { // get all ids from comment's text
+func (s *DataStore) submitImages(comment store.Comment) {
+	idsFn := func() []string { // get all ids from comment's text
 		// this can be called after last edit, we have to retrieve fresh comment
-		cc, err := s.Engine.Get(engine.GetRequest{Locator: locator, CommentID: commentID})
+		cc, err := s.Engine.Get(engine.GetRequest{Locator: comment.Locator, CommentID: comment.ID})
 		if err != nil {
-			log.Printf("[WARN] can't get comment's %s text for image extraction, %v", commentID, err)
+			log.Printf("[WARN] can't get comment's %s text for image extraction, %v", comment.ID, err)
 			return nil
 		}
 		imgIds, err := s.ImageService.ExtractPictures(cc.Text)
 		if err != nil {
-			log.Printf("[WARN] can't get extract pictures from %s, %v", commentID, err)
+			log.Printf("[WARN] can't get extract pictures from %s, %v", comment.ID, err)
 			return nil
 		}
 		if len(imgIds) > 0 {
-			log.Printf("[DEBUG] image ids extracted from %s - %+v", commentID, imgIds)
+			log.Printf("[DEBUG] image ids extracted from %s - %+v", comment.ID, imgIds)
 		}
 		return imgIds
-	})
+	}
+
+	var err error
+	if comment.Imported {
+		err = s.ImageService.SubmitAndCommit(idsFn)
+	} else {
+		s.ImageService.Submit(idsFn)
+	}
+
+	if err != nil {
+		log.Printf("[WARN] failed to commit comment's images: %v", err)
+	}
 }
 
 // prepareNewComment sets new comment fields, hashing and sanitizing data
@@ -315,7 +327,7 @@ func (s *DataStore) Vote(req VoteReq) (comment store.Comment, err error) {
 	}
 
 	v, voted := comment.Votes[req.UserID]
-	if voted && v == req.Val {
+	if voted && v == req.Val { // voted before and same vote (+/-) again. Change allowed, i.e. +, - or -, + is fine
 		return comment, errors.Errorf("user %s already voted for %s", req.UserID, req.CommentID)
 	}
 
@@ -341,22 +353,22 @@ func (s *DataStore) Vote(req VoteReq) (comment store.Comment, err error) {
 		return comment, errors.Errorf("minimal score reached for comment %s", req.CommentID)
 	}
 
-	// reset vote if user changed to opposite
+	// add ip hash to voted ip map
+	if comment.VotedIPs == nil {
+		comment.VotedIPs = map[string]store.VotedIPInfo{}
+	}
+	comment.VotedIPs[userIPHash] = store.VotedIPInfo{Timestamp: time.Now(), Value: req.Val}
+
+	// reset vote if user changed to opposite. Effectively it is "forget about prev votes" to allow "+ - -" or "- + +" corrections
 	if voted && v != req.Val {
 		delete(comment.Votes, req.UserID)
+		delete(comment.VotedIPs, userIPHash)
 	}
 
 	// add to voted map if first vote
 	if !voted {
 		comment.Votes[req.UserID] = req.Val
 	}
-
-	// add ip hash to voted ip map
-	if comment.VotedIPs == nil {
-		comment.VotedIPs = map[string]store.VotedIPInfo{}
-	}
-
-	comment.VotedIPs[userIPHash] = store.VotedIPInfo{Timestamp: time.Now(), Value: req.Val}
 
 	// update score
 	if req.Val {
@@ -496,7 +508,7 @@ func (s *DataStore) HasReplies(comment store.Comment) bool {
 				// When this code is reached, key "comment.ID" is not in cache.
 				// Calling cache.Get on it will put it in cache with 5 minutes TTL.
 				// We call it with empty struct as value as we care about keys and not values.
-				_, _ = s.repliesCache.Get(comment.ID, func() (lcw.Value, error) { return struct{}{}, nil })
+				_, _ = s.repliesCache.Get(comment.ID, func() (interface{}, error) { return struct{}{}, nil })
 				return true
 			}
 		}
@@ -846,7 +858,15 @@ func (s *DataStore) Last(siteID string, limit int, since time.Time, user store.U
 
 // Close store service
 func (s *DataStore) Close() error {
-	return s.Engine.Close()
+	errs := new(multierror.Error)
+	if s.repliesCache.LoadingCache != nil {
+		errs = multierror.Append(errs, s.repliesCache.LoadingCache.Close())
+	}
+	if s.TitleExtractor != nil {
+		errs = multierror.Append(errs, s.TitleExtractor.Close())
+	}
+	errs = multierror.Append(errs, s.Engine.Close())
+	return errs.ErrorOrNil()
 }
 
 func (s *DataStore) upsAndDowns(c store.Comment) (ups, downs int) {
@@ -905,6 +925,7 @@ func (s *DataStore) alterComment(c store.Comment, user store.User) (res store.Co
 	}
 
 	c = s.prepVotes(c, user)
+	c.Locator.URL = c.SanitizeAsURL(c.Locator.URL) // urls prior to #927
 	return c
 }
 
@@ -921,7 +942,8 @@ func (s *DataStore) prepVotes(c store.Comment, user store.User) store.Comment {
 		}
 	}
 
-	c.Votes = nil // hide voters list
+	c.Votes = nil    // hide voters list
+	c.VotedIPs = nil // hide voted ips (hashes)
 	return c
 }
 
@@ -929,7 +951,7 @@ func (s *DataStore) prepVotes(c store.Comment, user store.User) store.Comment {
 // Note: secret shared across sites, but some sites can be disabled.
 func (s *DataStore) getSecret(siteID string) (secret string, err error) {
 
-	if secret, err = s.AdminStore.Key(); err != nil {
+	if secret, err = s.AdminStore.Key("any"); err != nil {
 		return "", errors.Wrapf(err, "can't get secret for site %s", siteID)
 	}
 

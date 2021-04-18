@@ -1,128 +1,121 @@
-import { BASE_URL, API_BASE } from './constants';
+import { httpErrorMap, httpMessages, RequestError } from 'utils/errorUtils';
+
 import { siteId } from './settings';
-import { StaticStore } from './static_store';
 import { getCookie } from './cookies';
-import { httpErrorMap, isFailedFetch, httpMessages } from '@app/utils/errorUtils';
+import { StaticStore } from './static-store';
+import { BASE_URL, API_BASE } from './constants';
 
-export type FetcherMethod = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head';
-const methods: FetcherMethod[] = ['get', 'post', 'put', 'patch', 'delete', 'head'];
+/** Header name for JWT token */
+export const JWT_HEADER = 'X-JWT';
+/** Header name for XSRF token */
+export const XSRF_HEADER = 'X-XSRF-TOKEN';
+/** Cookie field with XSRF token */
+export const XSRF_COOKIE = 'XSRF-TOKEN';
 
-interface FetcherInitBase {
-  url: string;
-  overriddenApiBase?: string;
-  withCredentials?: boolean;
-  /** whether log error message to console */
-  logError?: boolean;
-}
+type QueryParams = Record<string, string | number | undefined>;
+type Payload = BodyInit | Record<string, unknown> | null;
+type BodylessMethod = <T>(url: string, query?: QueryParams) => Promise<T>;
+type BodyMethod = <T>(url: string, query?: QueryParams, body?: Payload) => Promise<T>;
+type Methods = {
+  get: BodylessMethod;
+  put: BodyMethod;
+  post: BodyMethod;
+  delete: BodylessMethod;
+};
 
-interface FetcherInitJSON extends FetcherInitBase {
-  contentType?: 'application/json';
-  body?: string | object | Blob | ArrayBuffer;
-}
+/** JWT token received from server and will be send by each request, if it present */
+let activeJwtToken: string | undefined;
 
-interface FetcherInitMultipart extends FetcherInitBase {
-  contentType: 'multipart/form-data';
-  body: FormData;
-}
+const createFetcher = (baseUrl: string = ''): Methods => {
+  /**
+   * Fetcher is abstraction on top of fetch
+   *
+   * @method - a string to set http method
+   * @uri – uri to API endpoint
+   * @query - collection of query params. They will be concatenated to URL. `siteId` will be added automatically.
+   * @body - data for sending to the server. If you pass object it will be stringified. If you pass form data it will be sent as is. Content type headers will be added automatically.
+   */
+  const request = async (method: string, uri: string, query: QueryParams = {}, body?: Payload) => {
+    const queryString = new URLSearchParams({ site: siteId, ...query });
+    const url = `${baseUrl}${uri}?${queryString}`;
+    const headers: Record<string, string> = {};
+    const params: RequestInit = { method };
 
-type FetcherInit = string | FetcherInitJSON | FetcherInitMultipart;
+    // Save token in memory and pass it into headers in case if storing cookies is disabled
+    if (activeJwtToken) {
+      headers[JWT_HEADER] = activeJwtToken;
+    }
+    headers[XSRF_HEADER] = getCookie(XSRF_COOKIE) || '';
 
-type FetcherObject = { [K in FetcherMethod]: <T = unknown>(data: FetcherInit) => Promise<T> };
-
-const fetcher = methods.reduce<Partial<FetcherObject>>((acc, method) => {
-  acc[method] = <T = unknown>(data: FetcherInit): Promise<T> => {
-    const {
-      url,
-      body = undefined,
-      withCredentials = false,
-      overriddenApiBase = API_BASE,
-      contentType = 'application/json',
-      logError = true,
-    } = typeof data === 'string' ? { url: data } : data;
-    const basename = `${BASE_URL}${overriddenApiBase}`;
-
-    const headers = new Headers({
-      Accept: 'application/json',
-      'X-XSRF-TOKEN': getCookie('XSRF-TOKEN') || '',
-    });
-
-    if (contentType !== 'multipart/form-data') {
-      headers.append('Content-Type', contentType);
+    if (body instanceof FormData) {
+      // Shouldn't add any kind of `Content-Type` if we send `FormData`
+      // Now FormData is sent only in case of uploading file
+      params.body = body;
+    } else if (typeof body === 'object' && body !== null) {
+      headers['Content-Type'] = 'application/json';
+      params.body = JSON.stringify(body);
+    } else {
+      params.body = body;
     }
 
-    let rurl = `${basename}${url}`;
+    try {
+      const res = await fetch(url, { ...params, headers });
+      // TODO: it should be clarified when frontend gets this header and what could be in it to simplify this logic and cover by tests
+      const date = (res.headers.has('date') && res.headers.get('date')) || '';
+      const timestamp = isNaN(Date.parse(date)) ? 0 : Date.parse(date);
+      const timeDiff = (new Date().getTime() - timestamp) / 1000;
 
-    const parameters: RequestInit = {
-      method,
-      headers,
-      mode: 'cors',
-      credentials: withCredentials ? 'include' : 'omit',
-    };
+      StaticStore.serverClientTimeDiff = timeDiff;
 
-    if (body) {
-      if (contentType === 'multipart/form-data') {
-        parameters.body = body as FormData;
-      } else if (typeof body === 'object' && !(body instanceof Blob) && !(body instanceof ArrayBuffer)) {
-        parameters.body = JSON.stringify(body);
-      } else {
-        parameters.body = body;
+      // backend could update jwt in any time. so, we should handle it
+      if (res.headers.has(JWT_HEADER)) {
+        activeJwtToken = res.headers.get(JWT_HEADER) as string;
       }
-    }
 
-    if (siteId && method !== 'post' && !rurl.includes('?site=') && !rurl.includes('&site=')) {
-      rurl += (rurl.includes('?') ? '&' : '?') + `site=${siteId}`;
-    }
+      if ([401, 403].includes(res.status)) {
+        activeJwtToken = undefined;
+      }
 
-    return fetch(rurl, parameters)
-      .then(res => {
-        const date = (res.headers.has('date') && res.headers.get('date')) || '';
-        const timestamp = isNaN(Date.parse(date)) ? 0 : Date.parse(date);
-        const timeDiff = (new Date().getTime() - timestamp) / 1000;
-        StaticStore.serverClientTimeDiff = timeDiff;
+      if (res.status >= 400) {
+        if (httpErrorMap.has(res.status)) {
+          const descriptor = httpErrorMap.get(res.status) || httpMessages.unexpectedError;
 
-        if (res.status >= 400) {
-          if (httpErrorMap.has(res.status)) {
-            const descriptor = httpErrorMap.get(res.status) || httpMessages.unexpectedError;
-            throw {
-              code: res.status,
-              error: descriptor.defaultMessage,
-            };
+          throw new RequestError(descriptor.defaultMessage, res.status);
+        }
+
+        return res.text().then((text) => {
+          let err;
+          try {
+            err = JSON.parse(text);
+          } catch (e) {
+            throw new RequestError(httpMessages.unexpectedError.defaultMessage, 0);
           }
-          return res.text().then(text => {
-            let err;
-            try {
-              err = JSON.parse(text);
-            } catch (e) {
-              if (logError) {
-                // eslint-disable-next-line no-console
-                console.error(err);
-              }
-              throw {
-                code: 0,
-                error: httpMessages.unexpectedError.defaultMessage,
-              };
-            }
-            throw err;
-          });
-        }
+          throw err;
+        });
+      }
 
-        if (res.headers.has('Content-Type') && res.headers.get('Content-Type')!.indexOf('application/json') === 0) {
-          return res.json();
-        }
+      if (res.headers.get('Content-Type')?.indexOf('application/json') === 0) {
+        return res.json();
+      }
 
-        return res.text();
-      })
-      .catch(e => {
-        if (isFailedFetch(e)) {
-          throw {
-            code: -2,
-            error: e.message,
-          };
-        }
-        throw e;
-      });
+      return res.text();
+    } catch (e) {
+      if (e?.message === 'Failed to fetch') {
+        throw new RequestError(e.message, -2);
+      }
+
+      throw e;
+    }
   };
-  return acc;
-}, {}) as FetcherObject;
 
-export default fetcher;
+  return {
+    get: (uri: string, query: QueryParams, body: Payload) => request('get', uri, query, body),
+    put: (uri: string, query: QueryParams, body: Payload) => request('put', uri, query, body),
+    post: (uri: string, query: QueryParams, body: Payload) => request('post', uri, query, body),
+    delete: (uri: string, query: QueryParams, body: Payload) => request('delete', uri, query, body),
+  } as Methods;
+};
+
+export const apiFetcher = createFetcher(`${BASE_URL}${API_BASE}`);
+export const authFetcher = createFetcher(`${BASE_URL}/auth`);
+export const adminFetcher = createFetcher(`${BASE_URL}${API_BASE}/admin`);
