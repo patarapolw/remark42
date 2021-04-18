@@ -1,7 +1,7 @@
 import 'jest-fetch-mock';
 import type { Theme } from 'common/types';
 
-type RemarkConfig = {
+export type RemarkConfig = {
   host: string;
   site_id: string;
   url?: string;
@@ -17,7 +17,7 @@ type RemarkConfig = {
 
 declare global {
   interface Window {
-    remark_config: RemarkConfig;
+    remark_config?: RemarkConfig;
     REMARK42: {
       changeTheme?: (theme: Theme) => void;
       destroy?: () => void;
@@ -29,6 +29,8 @@ declare global {
             destroy(): void;
           }
         | undefined;
+      createLastComment: (remark_config: RemarkConfig) => Promise<void>;
+      createCounter: (remark_config: RemarkConfig) => void;
     };
   }
 

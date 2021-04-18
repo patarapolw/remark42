@@ -1,5 +1,6 @@
 import type { UserInfo, Theme } from 'common/types';
 import { BASE_URL, NODE_ID, COMMENT_NODE_CLASSNAME_PREFIX } from 'common/constants.config';
+import type { RemarkConfig } from 'typings/global';
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
@@ -61,7 +62,8 @@ function init() {
   window.dispatchEvent(new Event('REMARK42::ready'));
 }
 
-function createInstance(config: typeof window.remark_config) {
+function createInstance(config: RemarkConfig) {
+  config.host = config.host || BASE_URL;
   const root = config.node instanceof HTMLElement ? config.node : document.getElementById(config.node || NODE_ID);
 
   if (!root) {
@@ -91,7 +93,7 @@ function createInstance(config: typeof window.remark_config) {
 
   const iframe =
     (root.firstElementChild as HTMLIFrameElement) ||
-    createFrame({ host: BASE_URL, query, __colors__: config.__colors__ });
+    createFrame({ host: config.host, query, __colors__: config.__colors__ });
 
   root.appendChild(iframe);
 
@@ -204,7 +206,7 @@ function createInstance(config: typeof window.remark_config) {
       const queryUserInfo = `${query}&page=user-info&&id=${user.id}&name=${user.name}&picture=${
         user.picture || ''
       }&isDefaultPicture=${user.isDefaultPicture || 0}`;
-      const iframe = createFrame({ host: BASE_URL, query: queryUserInfo, height: '100%', margin: '0' });
+      const iframe = createFrame({ host: config.host, query: queryUserInfo, height: '100%', margin: '0' });
       this.node.appendChild(iframe);
       this.iframe = iframe;
       this.node.appendChild(this.closeEl);
