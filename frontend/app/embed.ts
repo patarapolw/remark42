@@ -69,10 +69,7 @@ function createInstance(config: RemarkConfig) {
   if (!root) {
     throw new Error("Remark42: Can't find root node.");
   }
-  if (!window.remark_config) {
-    throw new Error('Remark42: Config object is undefined.');
-  }
-  if (!window.remark_config.site_id) {
+  if (!config.site_id) {
     throw new Error('Remark42: Site ID is undefined.');
   }
 
